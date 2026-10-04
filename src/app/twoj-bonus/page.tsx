@@ -77,7 +77,7 @@ const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   return false;
 };
 
-// Precyzyjny odczyt liczby rat z obiektu karnetu
+// Precyzyjny odczyt liczby opłaconych rat z obiektu karnetu
 const getInstallmentsFromPass = (pass: any): number => {
   if (!pass) return 0;
 
@@ -102,7 +102,45 @@ const getInstallmentsFromPass = (pass: any): number => {
     }
   }
 
-  return 0;
+  return 1;
+};
+
+// Obliczanie ile miesięcy umowy faktycznie rozpoczęło się w kalendarzu (zabezpieczenie przed płatnościami z góry)
+const getContractStartedMonths = (pass: any): number => {
+  if (!pass) return 1;
+  const installments = getInstallmentsFromPass(pass);
+  const now = new Date();
+
+  // 1. Sprawdzamy czy w obiekcie zapisano bezpośrednią datę rozpoczęcia / zakupu
+  const rawStart = pass.dataRozpoczecia || pass.dataAktywacji || pass.odDnia || pass.dataZakupu || pass.created_at;
+  if (rawStart) {
+    const sDate = new Date(rawStart);
+    if (!isNaN(sDate.getTime())) {
+      const diffMs = now.getTime() - sDate.getTime();
+      if (diffMs <= 0) return 1;
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const monthsElapsed = Math.floor(diffDays / 30) + 1;
+      return Math.min(installments > 0 ? installments : monthsElapsed, Math.max(1, monthsElapsed));
+    }
+  }
+
+  // 2. Jeśli liczymy wstecz na podstawie waznyDo oraz liczby rat
+  if (pass.waznyDo) {
+    const [wY, wM, wD] = String(pass.waznyDo).split('-').map(Number);
+    if (wY && wM) {
+      const instCount = Math.max(1, installments);
+      const startMonthIndex = (wM - 1) - instCount;
+      const contractStartDate = new Date(wY, startMonthIndex, wD || 1);
+
+      const diffMs = now.getTime() - contractStartDate.getTime();
+      if (diffMs <= 0) return 1;
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const monthsElapsed = Math.floor(diffDays / 30) + 1;
+      return Math.min(instCount, Math.max(1, monthsElapsed));
+    }
+  }
+
+  return Math.max(1, installments);
 };
 
 // Długość karnetu w miesiącach
@@ -136,16 +174,15 @@ const getElapsedMonthsForPass = (pass: any): number => {
   const suspensionDays = getPassSuspensionDays(pass);
   const expDate = new Date(eY, eM - 1, eD || 1);
   const startDateMs = expDate.getTime() - (totalMonths * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
-  const startDate = new Date(startDateMs);
 
-  const activeTimeMs = Math.max(0, (now.getTime() - startDate.getTime()) - (suspensionDays * 24 * 60 * 60 * 1000));
+  const activeTimeMs = Math.max(0, (now.getTime() - startDateMs) - (suspensionDays * 24 * 60 * 60 * 1000));
   const activeDays = Math.floor(activeTimeMs / (1000 * 60 * 60 * 24));
   
   const elapsed = Math.max(1, Math.floor(activeDays / 30));
   return Math.min(totalMonths, elapsed);
 };
 
-// Wyliczanie rzeczywistej ciągłości ogólnej (z uwzględnieniem zerwania ciągłości)
+// Wyliczanie rzeczywistej ciągłości ogólnej do rabatu lojalnościowego (NIENARUSZONE DLA RABATU)
 const getClientEffectiveContinuity = (client: any): number => {
   if (!client) return 1;
   if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
@@ -170,7 +207,23 @@ const getClientEffectiveContinuity = (client: any): number => {
   return Math.max(rawContinuity, maxInstallments, maxLongPassMonths, 1);
 };
 
-// Prawidłowa dynamiczna odmiana jednostki w zależności od wyboru w progu
+// Pomocnik do wyciągania bieżącego aktywnego karnetu klubowicza
+const getActivePassForClient = (passes: any[]): any => {
+  if (!Array.isArray(passes) || passes.length === 0) return null;
+  const today = new Date().toISOString().split('T')[0];
+
+  const nonArchived = passes.filter(p => p && p.status !== 'archiwalny' && p.archiwalny !== true);
+  if (nonArchived.length === 0) return passes[passes.length - 1];
+
+  const validPasses = nonArchived.filter(p => !p.waznyDo || p.waznyDo >= today);
+  if (validPasses.length > 0) {
+    return validPasses[validPasses.length - 1];
+  }
+
+  return nonArchived[nonArchived.length - 1];
+};
+
+// Dynamiczna odmiana jednostki w zależności od wyboru w progu
 const getTierUnitLabel = (tier: any, tabela: any) => {
   const val = Number(tier.threshold) || 1;
   
@@ -202,7 +255,7 @@ const getTierUnitLabel = (tier: any, tabela: any) => {
   return tier.unit || 'cykli';
 };
 
-// Zwracanie palety barw węzła dla danego akcentu
+// Paleta barw węzła dla danego akcentu
 const getNodeAccentStyles = (accent: string, isReached: boolean, isSelected: boolean) => {
   if (isReached) {
     return {
@@ -258,7 +311,7 @@ export default function TwojBonusPage() {
       id: 'umowa',
       badge: 'Karnety Cykliczne (Umowa)',
       title: 'Rozliczenie ratalne i kontynuacja (13, 14, 15...)',
-      desc: 'Klubowicz zdobywa kolejne poziomy z każdą opłaconą ratą. Przedłużenie umowy po 12 miesiącach kontynuuje naliczanie jako miesiąc 13, 14 itd.'
+      desc: 'Klubowicz zdobywa kolejne poziomy z każdą opłaconą ratą po rozpoczęciu danego miesiąca. Przedłużenie umowy po 12 miesiącach kontynuuje naliczanie jako miesiąc 13, 14 itd.'
     },
     {
       id: 'open',
@@ -391,6 +444,11 @@ export default function TwojBonusPage() {
             try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch (e) {}
 
             const isContract = isContractPassCheck(k);
+            const rawTiers = meta.customTiers && meta.customTiers.length > 0
+              ? [...meta.customTiers]
+              : (isContract ? defaultTiersUmowa : defaultTiersOpen);
+            
+            rawTiers.sort((a: any, b: any) => (Number(a.threshold) || 0) - (Number(b.threshold) || 0));
 
             return {
               id: k.id,
@@ -399,7 +457,7 @@ export default function TwojBonusPage() {
               cena: k.cena_brutto || k.cena || 0,
               kolejnosc: k.kolejnosc !== null && k.kolejnosc !== undefined ? k.kolejnosc : index,
               inne_ustawienia: meta,
-              customTiers: meta.customTiers && meta.customTiers.length > 0 ? meta.customTiers : (isContract ? defaultTiersUmowa : defaultTiersOpen)
+              customTiers: rawTiers
             };
           });
 
@@ -433,11 +491,6 @@ export default function TwojBonusPage() {
 
           const isLostCont = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
           const effectiveCont = isLostCont ? 1 : getClientEffectiveContinuity({ ...c, karnetyKlubowicza: parsedKarnety });
-          const rawCont = parseInt(String(c.cyklCiaglosci || c.cyklciaglosci || '1'), 10) || 1;
-
-          if (!isLostCont && effectiveCont > rawCont) {
-            supabase.from('klienci').update({ cyklCiaglosci: effectiveCont }).eq('id', c.id).then();
-          }
 
           return {
             ...c,
@@ -698,12 +751,16 @@ export default function TwojBonusPage() {
     } catch (e) {}
   };
 
+  // Precyzyjne naliczanie postępu DLA DANEGO KARNETU (bez dziedziczenia starych karnetów)
   const calculateMemberProgress = (tabela: any, targetUser: any) => {
     const user = targetUser || inspectedClient || currentUser;
     if (!isProgramActive || !user) return { value: 0, isReset: false, reason: '' };
 
     const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
-    const userPass = passes.find((k: any) => isPassMatchingTable(k, tabela));
+    
+    // Dopasowujemy najświeższy pasujący karnet
+    const matchingPasses = passes.filter((k: any) => isPassMatchingTable(k, tabela));
+    const userPass = matchingPasses[matchingPasses.length - 1];
 
     if (!userPass) return { value: 0, isReset: false, reason: '' };
 
@@ -716,16 +773,15 @@ export default function TwojBonusPage() {
       };
     }
 
-    if (userPass.isPassChangedReset || userPass.changedPassReset) {
-      return { value: 0, isReset: true, reason: 'Zmiana karnetu na nowy – naliczanie od początku' };
-    }
-
     const isContract = isContractPassCheck(tabela) || isContractPassCheck(userPass);
 
     if (isContract) {
       const installmentsCount = getInstallmentsFromPass(userPass);
-      const effectiveContinuity = getClientEffectiveContinuity(user);
-      let finalMonths = Math.max(installmentsCount, effectiveContinuity, 1);
+      const startedMonths = getContractStartedMonths(userPass);
+      
+      // Staż to raty opłacone, ale NIE WIĘCEJ niż miesiące faktycznie rozpoczęte
+      let finalMonths = Math.min(installmentsCount, startedMonths);
+      if (finalMonths < 1) finalMonths = 1;
 
       const passHistZaw = safeJsonParse(userPass.historiaZawieszen || userPass.historiazawieszen, []);
       const totalSuspendedDays = passHistZaw.reduce((sum: number, hz: any) => sum + (parseInt(hz.dni || hz.planowane_dni || '0', 10) || 0), 0);
@@ -746,17 +802,19 @@ export default function TwojBonusPage() {
       return { value: Math.max(0, pocz - poz), isReset: false, reason: '' };
     }
 
+    // Karnety na czas (OPEN): liczymy upływ czasu tego konkretnego karnetu
     const elapsedMonths = getElapsedMonthsForPass(userPass);
-    const continuity = getClientEffectiveContinuity(user);
-    const finalVal = Math.max(elapsedMonths, continuity, 1);
+    const finalVal = Math.max(elapsedMonths, 1);
 
     return { value: finalVal, isReset: false, reason: '' };
   };
 
+  // Ustalanie daty odblokowania progu z blokadą dat przyszłych
   const getTierUnlockDate = (tier: any, tabela: any, user: any): string | null => {
     if (!user) return null;
     const passes = safeJsonParse(user.karnetyKlubowicza || user.KarnetyKlubowicza || user.karnetyklubowicza, []);
-    const userPass = passes.find((k: any) => isPassMatchingTable(k, tabela));
+    const matchingPasses = passes.filter((k: any) => isPassMatchingTable(k, tabela));
+    const userPass = matchingPasses[matchingPasses.length - 1];
     if (!userPass) return null;
 
     const progress = calculateMemberProgress(tabela, user);
@@ -768,17 +826,23 @@ export default function TwojBonusPage() {
     const formatDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 
     if (isContract) {
-      const currentRata = Math.max(1, progress.value);
-      const baseDateStr = userPass.waznyDo || user.umowa_oplacona_do || new Date().toISOString().split('T')[0];
-      let [bYear, bMonth] = baseDateStr.split('-').map(Number);
-      if (!bYear || !bMonth) {
-        const now = new Date();
-        bYear = now.getFullYear();
-        bMonth = now.getMonth() + 1;
+      const installmentsCount = getInstallmentsFromPass(userPass);
+      const rawStart = userPass.dataRozpoczecia || userPass.dataAktywacji || userPass.odDnia || userPass.dataZakupu || userPass.created_at;
+
+      let startDate: Date;
+      if (rawStart && !isNaN(new Date(rawStart).getTime())) {
+        startDate = new Date(rawStart);
+      } else if (userPass.waznyDo) {
+        const [wY, wM, wD] = String(userPass.waznyDo).split('-').map(Number);
+        const inst = Math.max(1, installmentsCount);
+        startDate = new Date(wY, (wM - 1) - inst, wD || 1);
+      } else {
+        startDate = new Date();
       }
 
-      const targetMonthIndex = (bMonth - 1) - (currentRata - thresh);
-      const targetDate = new Date(bYear, targetMonthIndex, 1);
+      // Próg 'thresh' odblokowuje się w dniu startu (thresh - 1) miesiąca
+      const targetDate = new Date(startDate);
+      targetDate.setMonth(targetDate.getMonth() + (thresh - 1));
       return formatDate(targetDate);
     }
 
@@ -790,24 +854,8 @@ export default function TwojBonusPage() {
         const expDate = new Date(eY, eM - 1, eD || 1);
         
         const startDateMs = expDate.getTime() - (totalDurationMonths * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
-        const unlockDateMs = startDateMs + (thresh * 30 * 24 * 60 * 60 * 1000) + (suspensionDays * 24 * 60 * 60 * 1000);
+        const unlockDateMs = startDateMs + ((thresh - 1) * 30 * 24 * 60 * 60 * 1000) + (suspensionDays * 24 * 60 * 60 * 1000);
         return formatDate(new Date(unlockDateMs));
-      }
-    }
-
-    const userTx: any[] = user.transactions || [];
-    const cycleTx = userTx.filter((t: any) => {
-      const desc = String(t.opis || '').toLowerCase();
-      const typ = String(t.typ_operacji || '').toLowerCase();
-      return (typ.includes('karnet') || desc.includes('karnet') || desc.includes('przedłużenie')) && !desc.includes('usunięcie');
-    });
-
-    if (cycleTx.length >= thresh) {
-      cycleTx.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      const targetTx = cycleTx[thresh - 1];
-      if (targetTx?.created_at) {
-        const d = new Date(targetTx.created_at);
-        if (!isNaN(d.getTime())) return formatDate(d);
       }
     }
 
@@ -831,7 +879,7 @@ export default function TwojBonusPage() {
   const getUnlockedLevelsForClient = (client: any) => {
     if (!client) return [];
     const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
-    const clientPass = passes[0];
+    const clientPass = getActivePassForClient(passes);
     if (!clientPass) return [];
 
     const matchedTable = bonusTables.find(t => isPassMatchingTable(clientPass, t));
@@ -846,7 +894,7 @@ export default function TwojBonusPage() {
   const qualifiedMembersList = allKlienci.map(client => {
     const unlocked = getUnlockedLevelsForClient(client);
     const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
-    const pass = passes[0];
+    const pass = getActivePassForClient(passes) || passes[0];
     const topLevel = unlocked.length > 0 ? unlocked[unlocked.length - 1] : null;
     const verificationKey = `${client.id}_${topLevel?.id}`;
     const isAlreadyVerified = verifiedMemberTiers.includes(verificationKey);
@@ -901,10 +949,13 @@ export default function TwojBonusPage() {
     const remainingCount = qualifiedMembersList.filter(c => c.verificationKey !== verificationKey).length;
     if (remainingCount <= 0) {
       localStorage.removeItem('bonus_has_notification');
+      localStorage.setItem('bonus_pending_count', '0');
+    } else {
+      localStorage.setItem('bonus_pending_count', String(remainingCount));
     }
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('bonus-notification-update'));
+      window.dispatchEvent(new CustomEvent('bonus-notification-update', { detail: { count: remainingCount } }));
     }
   };
 
@@ -951,7 +1002,8 @@ export default function TwojBonusPage() {
     if (typeof window !== 'undefined' && (appRole === 'admin' || appRole === 'trener')) {
       if (qualifiedMembersList.length === 0) {
         localStorage.removeItem('bonus_has_notification');
-        window.dispatchEvent(new Event('bonus-notification-update'));
+        localStorage.setItem('bonus_pending_count', '0');
+        window.dispatchEvent(new CustomEvent('bonus-notification-update', { detail: { count: 0 } }));
       }
     }
   }, [qualifiedMembersList.length, appRole]);
@@ -966,7 +1018,7 @@ export default function TwojBonusPage() {
 
   const activeViewingUser = inspectedClient || currentUser;
   const activeViewingPasses = safeJsonParse(activeViewingUser?.karnetyKlubowicza || activeViewingUser?.KarnetyKlubowicza || activeViewingUser?.karnetyklubowicza, []);
-  const activeViewingPass = activeViewingPasses[0];
+  const activeViewingPass = getActivePassForClient(activeViewingPasses);
   const activeViewingUserContinuity = getClientEffectiveContinuity(activeViewingUser);
 
   const getAccentBorder = (accent: string) => {
@@ -980,8 +1032,8 @@ export default function TwojBonusPage() {
   };
 
   const displayedTables = [...bonusTables].sort((a, b) => {
-    const aIsUserPass = activeViewingPasses.some((k: any) => isPassMatchingTable(k, a));
-    const bIsUserPass = activeViewingPasses.some((k: any) => isPassMatchingTable(k, b));
+    const aIsUserPass = activeViewingPass && isPassMatchingTable(activeViewingPass, a);
+    const bIsUserPass = activeViewingPass && isPassMatchingTable(activeViewingPass, b);
 
     if (aIsUserPass && !bIsUserPass) return -1;
     if (!aIsUserPass && bIsUserPass) return 1;
@@ -1107,6 +1159,7 @@ export default function TwojBonusPage() {
               <div className="bg-white border border-sky-200 rounded-2xl p-2 shadow-lg divide-y divide-sky-100 max-h-56 overflow-y-auto mt-2">
                 {searchedMembers.map((client) => {
                   const clientPasses = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
+                  const bestPass = getActivePassForClient(clientPasses) || clientPasses[0];
                   return (
                     <div
                       key={client.id}
@@ -1118,7 +1171,7 @@ export default function TwojBonusPage() {
                     >
                       <div>
                         <div className="font-bold text-slate-900 text-xs">{client.firstName} {client.lastName}</div>
-                        <div className="text-[10px] text-slate-500">{client.email} • Karnet: {clientPasses[0]?.nazwa || 'Brak'}</div>
+                        <div className="text-[10px] text-slate-500">{client.email} • Karnet: {bestPass?.nazwa || 'Brak'}</div>
                       </div>
                       <button className="bg-sky-900 text-white font-bold text-[10px] px-3 py-1.5 rounded-lg uppercase">
                         Pokaż naliczenie →
@@ -1139,7 +1192,7 @@ export default function TwojBonusPage() {
                     Podgląd profilu: {inspectedClient.firstName} {inspectedClient.lastName} ({inspectedClient.email})
                   </span>
                   <p className="text-[11px] text-amber-900 font-medium">
-                    Karnet: {activeViewingPass?.nazwa || 'Brak'} • Ciągłość ogólna: {activeViewingUserContinuity} mies.
+                    Karnet: {activeViewingPass?.nazwa || 'Brak'} • Ciągłość ogólna (rabat): {activeViewingUserContinuity} mies.
                   </p>
                 </div>
               </div>
@@ -1260,7 +1313,7 @@ export default function TwojBonusPage() {
       {/* 3. DWA KARNETY NA JEDNEJ WYSOKOŚCI (TABELE ROADMAPY) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {displayedTables.map((tabela, tableIndex) => {
-          const matchedPass = activeViewingPasses.find((k: any) => isPassMatchingTable(k, tabela));
+          const matchedPass = activeViewingPass && isPassMatchingTable(activeViewingPass, tabela);
           const isUserPass = !!matchedPass;
 
           const progressData = calculateMemberProgress(tabela, activeViewingUser);
