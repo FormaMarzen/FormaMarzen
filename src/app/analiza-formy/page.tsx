@@ -68,7 +68,7 @@ interface RedukcjaUczestnik {
   edycja_id: number;
   klient_id: number | string;
   oplacone: boolean;
-  metoda_platnosci?: 'autopay' | 'gotowka' | 'inna';
+  metoda_platnosci?: 'autopay' | 'gotowka' | 'portfel' | 'inna';
   brak_pomiaru_koncowego?: boolean;
   pokaz_pomiary?: boolean;
   punkty_calkowite: number;
@@ -409,7 +409,7 @@ export default function AnalizaFormyPage() {
   const [isAddNagrodaModalOpen, setIsAddNagrodaModalOpen] = useState<boolean>(false);
   const [editingNagrodaId, setEditingNagrodaId] = useState<number | null>(null);
   const [isManualAddModalOpen, setIsManualAddModalOpen] = useState<boolean>(false);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'autopay' | 'gotowka'>('autopay');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'autopay' | 'gotowka' | 'portfel'>('autopay');
   const [targetPomiarEtap, setTargetPomiarEtap] = useState<'start' | 'koniec'>('start');
   const [targetPomiarKlientId, setTargetPomiarKlientId] = useState<number | string | null>(null);
 
@@ -417,7 +417,7 @@ export default function AnalizaFormyPage() {
   const [manualAddSearchQuery, setManualAddSearchQuery] = useState<string>('');
   const [isManualSearchFocused, setIsManualSearchFocused] = useState<boolean>(false);
   const [manualAddOplacone, setManualAddOplacone] = useState<boolean>(true);
-  const [manualAddMetoda, setManualAddMetoda] = useState<'gotowka' | 'autopay' | 'inna'>('gotowka');
+  const [manualAddMetoda, setManualAddMetoda] = useState<'gotowka' | 'autopay' | 'portfel' | 'inna'>('gotowka');
   const [openDropdownId, setOpenDropdownId] = useState<number | null>(null);
 
   const [badaniaList, setBadaniaList] = useState<BadaniaKrwiWpis[]>([]);
@@ -835,7 +835,6 @@ export default function AnalizaFormyPage() {
       console.error("Błąd ładowania wyzwań redukcji:", err);
     }
   };
-
   const fetchWlasneTabele = async (klientId: number | string | null, email: string) => {
     try {
       const tKey = `wlasne_badania_tabele_${klientId || email}`;
@@ -1111,6 +1110,7 @@ export default function AnalizaFormyPage() {
       setMeasurements([]);
     }
   };
+
   const handleSelectClient = (klient: Klient) => {
     setSelectedKlient(klient);
     setSearchQuery(`${klient.Imię || ''} ${klient.Nazwisko || ''}`.trim());
@@ -1934,6 +1934,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // OBSŁUGA REJESTRACJI I PŁATNOŚCI ZA WYZWANIE (AUTOPAY / PORTFEL / GOTÓWKA)
   const handleConfirmJoinWithPayment = async () => {
     const kId = selectedKlient?.id || currentUserId;
     if (!kId || !selectedEdycjaId) {
@@ -1959,6 +1960,74 @@ export default function AnalizaFormyPage() {
       }], { onConflict: 'edycja_id,klient_id' });
 
       await redirectToAutopay(kwota, orderId, opisOperacji, 'redukcja_fee');
+    } else if (selectedPaymentMethod === 'portfel') {
+      setIsProcessingPayment(true);
+      try {
+        const { data: klientData, error: kErr } = await supabase
+          .from('klienci')
+          .select('id, portfel, "E-mail"')
+          .eq('id', kId)
+          .maybeSingle();
+
+        if (kErr || !klientData) {
+          throw new Error("Nie udało się pobrać danych profilu klubowicza.");
+        }
+
+        const currentWallet = Number(klientData.portfel) || 0;
+        if (currentWallet < kwota) {
+          alert(`Niewystarczające środki w Twoim portfelu!\nAktualny stan: ${currentWallet.toFixed(2)} zł\nWpisowe: ${kwota.toFixed(2)} zł\n\nWybierz płatność Autopay lub gotówką na recepcji.`);
+          setIsProcessingPayment(false);
+          return;
+        }
+
+        const newWallet = currentWallet - kwota;
+        const { error: walletUpdateErr } = await supabase
+          .from('klienci')
+          .update({ portfel: newWallet })
+          .eq('id', kId);
+
+        if (walletUpdateErr) {
+          throw new Error("Błąd podczas pobierania środków z portfela: " + walletUpdateErr.message);
+        }
+
+        if (selectedKlient && String(selectedKlient.id) === String(kId)) {
+          setSelectedKlient(prev => prev ? { ...prev, portfel: newWallet } : null);
+        }
+        setKlienci(prev => prev.map(k => String(k.id) === String(kId) ? { ...k, portfel: newWallet } : k));
+
+        const { error: joinErr } = await supabase.from('klub_redukcja_uczestnicy').upsert([{
+          edycja_id: selectedEdycjaId,
+          klient_id: kId,
+          oplacone: true,
+          metoda_platnosci: 'portfel',
+          brak_pomiaru_koncowego: false,
+          pokaz_pomiary: true,
+          punkty_calkowite: 0.00
+        }], { onConflict: 'edycja_id,klient_id' });
+
+        if (joinErr) {
+          throw new Error("Błąd zapisu do wyzwania: " + joinErr.message);
+        }
+
+        try {
+          await supabase.from('powiadomienia').insert([{
+            klient_id: kId,
+            email: klientData['E-mail'] || '',
+            tytul: `Opłacono wpisowe: ${edycja?.nazwa || 'Wyzwanie Redukcji'}`,
+            tresc: `Pobrano ${kwota.toFixed(2)} zł z Twojego portfela w aplikacji na wpisowe do wyzwania "${edycja?.nazwa || 'Redukcja'}". Dostępne środki po operacji: ${newWallet.toFixed(2)} zł. Powodzenia! 🔥💪`,
+            przeczytane: false
+          }]);
+        } catch (e) {}
+
+        alert(`Zostałeś pomyślnie zarejestrowany!\nWpisowe (${kwota.toFixed(2)} zł) zostało pobrane z Twojego portfela w aplikacji.\nAktualny stan portfela: ${newWallet.toFixed(2)} zł.`);
+        setIsJoinModalOpen(false);
+        await loadEdycjaDetails(selectedEdycjaId);
+      } catch (err: any) {
+        console.error("Błąd płatności portfelem:", err);
+        alert("Błąd: " + err.message);
+      } finally {
+        setIsProcessingPayment(false);
+      }
     } else {
       const { error } = await supabase.from('klub_redukcja_uczestnicy').upsert([{
         edycja_id: selectedEdycjaId,
@@ -3443,7 +3512,7 @@ export default function AnalizaFormyPage() {
             </div>
           </div>
 
-          {/* PODIUM TOP 3 Z OSTATNIEJ ZAKOŃCZONEJ EDYCJI */}
+          {/* PODIUM TOP 3 Z OSTATNIEJ ZAKOŃCZONEJ EDYCJI (ZWYCIĘZCY Z IMIONAMI, NAZWISKAMI I ZDJĘCIAMI) */}
           {lastFinishedPodium && lastFinishedPodium.top3.length > 0 && (
             <div className="bg-gradient-to-br from-amber-500/10 via-white to-amber-50 border-2 border-amber-300 p-5 rounded-3xl shadow-sm space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-200/60 pb-3">
@@ -3933,7 +4002,7 @@ export default function AnalizaFormyPage() {
                                   </div>
                                   {appRole === 'admin' && (
                                     <div className="text-[9px] text-slate-400 font-normal">
-                                      Metoda: {row.metoda_platnosci === 'autopay' ? '⚡ Autopay' : '💵 Gotówka'}
+                                      Metoda: {row.metoda_platnosci === 'autopay' ? '⚡ Autopay' : row.metoda_platnosci === 'portfel' ? '👛 Portfel' : '💵 Gotówka'}
                                     </div>
                                   )}
                                 </div>
@@ -5458,6 +5527,7 @@ export default function AnalizaFormyPage() {
                   className="w-full p-3 border rounded-xl font-bold bg-white"
                 >
                   <option value="gotowka">💵 Gotówka na recepcji (Kasa Klubu)</option>
+                  <option value="portfel">👛 Portfel w aplikacji</option>
                   <option value="autopay">⚡ Autopay / Przelew</option>
                   <option value="inna">Inna forma</option>
                 </select>
@@ -5578,79 +5648,135 @@ export default function AnalizaFormyPage() {
         </div>
       )}
 
-      {/* MODAL: WYBÓR PŁATNOŚCI */}
-      {isJoinModalOpen && activeEdycjaObj && (
-        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-100">
-            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <div>
-                <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
-                  Dołącz do Wyzwania Redukcji
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Wpisowe do wyzwania: <span className="font-bold text-amber-600">{activeEdycjaObj.wpisowe_kwota || 30} zł</span>
-                </p>
-              </div>
-              <button onClick={() => setIsJoinModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
-            </div>
+      {/* MODAL: WYBÓR PŁATNOŚCI Z OBSŁUGĄ PORTFELA */}
+      {isJoinModalOpen && activeEdycjaObj && (() => {
+        const targetUserId = selectedKlient?.id || currentUserId;
+        const currentKlientObj = selectedKlient || (klienci || []).find(k => String(k.id) === String(targetUserId));
+        const userWalletBalance = Number(currentKlientObj?.portfel ?? 0);
+        const requiredFee = Number(activeEdycjaObj.wpisowe_kwota || 30.00);
+        const hasEnoughWalletFunds = userWalletBalance >= requiredFee;
 
-            <div className="space-y-3">
-              <label className="text-xs font-bold text-slate-700 block">Wybierz sposób opłacenia wpisowego:</label>
-              
-              <div 
-                onClick={() => setSelectedPaymentMethod('autopay')}
-                className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${selectedPaymentMethod === 'autopay' ? 'border-amber-500 bg-amber-50/50 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">⚡</span>
-                  <div>
-                    <div className="font-black text-xs text-slate-900">Płatność Online (Autopay / BLIK)</div>
-                    <div className="text-[10px] text-slate-500">Szybki przelew, BLIK lub karta – wpisowe zasila pulę wyzwania</div>
-                  </div>
+        return (
+          <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-100 animate-in fade-in zoom-in-95 duration-100">
+              <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+                <div>
+                  <h3 className="font-black text-sm uppercase tracking-wider text-sky-950">
+                    Dołącz do Wyzwania Redukcji
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Wpisowe do wyzwania: <span className="font-bold text-amber-600">{requiredFee.toFixed(2)} zł</span>
+                  </p>
                 </div>
-                <input type="radio" checked={selectedPaymentMethod === 'autopay'} onChange={() => setSelectedPaymentMethod('autopay')} className="text-amber-500" />
+                <button onClick={() => setIsJoinModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
               </div>
 
-              <div 
-                onClick={() => setSelectedPaymentMethod('gotowka')}
-                className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${selectedPaymentMethod === 'gotowka' ? 'border-amber-500 bg-amber-50/50 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">💵</span>
-                  <div>
-                    <div className="font-black text-xs text-slate-900">Gotówka w klubie (Recepcja)</div>
-                    <div className="text-[10px] text-slate-500">Wpłać 30 zł u trenera na sali, a trener potwierdzi wpłatę w kasie klubu</div>
+              <div className="space-y-3">
+                <label className="text-xs font-bold text-slate-700 block">Wybierz sposób opłacenia wpisowego:</label>
+                
+                {/* 1. PORTFEL W APLIKACJI */}
+                <div 
+                  onClick={() => {
+                    if (hasEnoughWalletFunds) setSelectedPaymentMethod('portfel');
+                  }}
+                  className={`p-4 rounded-2xl border-2 transition-all flex items-center justify-between ${
+                    !hasEnoughWalletFunds 
+                      ? 'opacity-60 cursor-not-allowed border-slate-200 bg-slate-50' 
+                      : selectedPaymentMethod === 'portfel' 
+                        ? 'border-amber-500 bg-amber-50/50 shadow-sm cursor-pointer' 
+                        : 'border-slate-200 hover:border-slate-300 cursor-pointer'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">👛</span>
+                    <div>
+                      <div className="font-black text-xs text-slate-900 flex items-center gap-2">
+                        <span>Portfel w aplikacji</span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${hasEnoughWalletFunds ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-rose-100 text-rose-800 border border-rose-200'}`}>
+                          Stan: {userWalletBalance.toFixed(2)} zł
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        {hasEnoughWalletFunds 
+                          ? `Pobierz ${requiredFee.toFixed(2)} zł bezpośrednio z Twojego salda portfela` 
+                          : `Brak wystarczających środków (masz ${userWalletBalance.toFixed(2)} zł, potrzebujesz ${requiredFee.toFixed(2)} zł)`}
+                      </div>
+                    </div>
                   </div>
+                  <input 
+                    type="radio" 
+                    disabled={!hasEnoughWalletFunds}
+                    checked={selectedPaymentMethod === 'portfel'} 
+                    onChange={() => {
+                      if (hasEnoughWalletFunds) setSelectedPaymentMethod('portfel');
+                    }} 
+                    className="text-amber-500 cursor-pointer" 
+                  />
                 </div>
-                <input type="radio" checked={selectedPaymentMethod === 'gotowka'} onChange={() => setSelectedPaymentMethod('gotowka')} className="text-amber-500" />
+
+                {/* 2. AUTOPAY / BLIK */}
+                <div 
+                  onClick={() => setSelectedPaymentMethod('autopay')}
+                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${selectedPaymentMethod === 'autopay' ? 'border-amber-500 bg-amber-50/50 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">⚡</span>
+                    <div>
+                      <div className="font-black text-xs text-slate-900">Płatność Online (Autopay / BLIK)</div>
+                      <div className="text-[10px] text-slate-500">Szybki przelew, BLIK lub karta – wpisowe zasila pulę wyzwania</div>
+                    </div>
+                  </div>
+                  <input type="radio" checked={selectedPaymentMethod === 'autopay'} onChange={() => setSelectedPaymentMethod('autopay')} className="text-amber-500 cursor-pointer" />
+                </div>
+
+                {/* 3. GOTÓWKA NA RECEPCJI */}
+                <div 
+                  onClick={() => setSelectedPaymentMethod('gotowka')}
+                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex items-center justify-between ${selectedPaymentMethod === 'gotowka' ? 'border-amber-500 bg-amber-50/50 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">💵</span>
+                    <div>
+                      <div className="font-black text-xs text-slate-900">Gotówka w klubie (Recepcja)</div>
+                      <div className="text-[10px] text-slate-500">Wpłać 30 zł u trenera na sali, a trener potwierdzi wpłatę w kasie klubu</div>
+                    </div>
+                  </div>
+                  <input type="radio" checked={selectedPaymentMethod === 'gotowka'} onChange={() => setSelectedPaymentMethod('gotowka')} className="text-amber-500 cursor-pointer" />
+                </div>
               </div>
-            </div>
 
-            <div className="bg-sky-50 border border-sky-200 p-3 rounded-xl text-[11px] text-sky-900 space-y-1">
-              <div>ℹ️ Pamiętaj, aby po zapisaniu umówić się z trenerem na wykonanie <b>początkowej analizy składu ciała</b> na analizatorze.</div>
-              <div className="text-slate-500 text-[10px]">W przypadku nieosiągnięcia minimalnej liczby uczestników ({activeEdycjaObj.min_uczestnikow || 5} osób), wpisowe zostanie w całości zwrócone do Twojego portfela w aplikacji.</div>
-            </div>
+              <div className="bg-sky-50 border border-sky-200 p-3 rounded-xl text-[11px] text-sky-900 space-y-1">
+                <div>ℹ️ Pamiętaj, aby po zapisaniu umówić się z trenerem na wykonanie <b>początkowej analizy składu ciała</b> na analizatorze.</div>
+                <div className="text-slate-500 text-[10px]">W przypadku nieosiągnięcia minimalnej liczby uczestników ({activeEdycjaObj.min_uczestnikow || 5} osób), wpisowe zostanie w całości zwrócone do Twojego portfela w aplikacji.</div>
+              </div>
 
-            <div className="flex gap-2 pt-2">
-              <button 
-                type="button" 
-                onClick={() => setIsJoinModalOpen(false)} 
-                className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs cursor-pointer"
-              >
-                Anuluj
-              </button>
-              <button 
-                type="button" 
-                disabled={isProcessingPayment}
-                onClick={handleConfirmJoinWithPayment}
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow disabled:opacity-50"
-              >
-                {isProcessingPayment ? 'Łączenie...' : selectedPaymentMethod === 'autopay' ? 'Opłać wpisowe ➔' : 'Potwierdź zapis ➔'}
-              </button>
+              <div className="flex gap-2 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setIsJoinModalOpen(false)} 
+                  className="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button 
+                  type="button" 
+                  disabled={isProcessingPayment || (selectedPaymentMethod === 'portfel' && !hasEnoughWalletFunds)}
+                  onClick={handleConfirmJoinWithPayment}
+                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black py-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow disabled:opacity-50"
+                >
+                  {isProcessingPayment 
+                    ? 'Przetwarzanie...' 
+                    : selectedPaymentMethod === 'autopay' 
+                      ? 'Opłać wpisowe ➔' 
+                      : selectedPaymentMethod === 'portfel' 
+                        ? `Zapłać z portfela (${requiredFee.toFixed(2)} zł) ➔` 
+                        : 'Potwierdź zapis ➔'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* MODAL: TWORZENIE NOWEJ EDYCJI */}
       {isNewEdycjaModalOpen && (
