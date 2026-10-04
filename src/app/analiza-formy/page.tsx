@@ -778,7 +778,8 @@ export default function AnalizaFormyPage() {
         // 4. Asynchroniczne załadowanie pełnej listy klientów w tle (nie blokuje interfejsu)
         fetchAllFromSupabase('klienci', '*', 'Nazwisko', true, 5).then((allClients) => {
           if (isMounted && allClients && allClients.length > 0) {
-            setKlienci(allClients as Klient[]);
+            const typedClients = allClients as Klient[];
+            setKlienci(typedClients);
           }
         });
 
@@ -827,13 +828,14 @@ export default function AnalizaFormyPage() {
           await loadEdycjaDetails(selectedEdycjaId, sorted);
         }
 
-        // Pobranie podium ostatniej zakończonej edycji
+        // Pobranie podium ostatniej zakończonej edycji z poprawnymi danymi
         await fetchLastFinishedPodium(sorted, (clientsOverride && clientsOverride.length > 0) ? clientsOverride : klienci);
       }
     } catch (err) {
       console.error("Błąd ładowania wyzwań redukcji:", err);
     }
   };
+
   const fetchWlasneTabele = async (klientId: number | string | null, email: string) => {
     try {
       const tKey = `wlasne_badania_tabele_${klientId || email}`;
@@ -934,6 +936,7 @@ export default function AnalizaFormyPage() {
     }
   };
 
+  // POBIERANIE WYNIKÓW I OBLICZENIE TOP 3 Z OSTATNIEGO ZAKOŃCZONEGO WYZWANIA (PODIUM) Z PEŁNYMI DANYMI ZWYCIĘZCÓW
   const fetchLastFinishedPodium = async (edycje: RedukcjaEdycja[], clientsList: Klient[]) => {
     try {
       const finishedEdycje = edycje
@@ -955,8 +958,38 @@ export default function AnalizaFormyPage() {
       const parts = (uczestnicyRes.data || []) as RedukcjaUczestnik[];
       const poms = (pomiaryRes.data || []) as RedukcjaPomiar[];
 
+      if (parts.length === 0) {
+        setLastFinishedPodium(null);
+        return;
+      }
+
+      // Bezpośrednie i niezawodne pobranie profili klientów biorących udział w edycji
+      const participantClientIds = Array.from(new Set(parts.map(p => p.klient_id).filter(Boolean)));
+      const clientsMap: Record<string, Klient> = {};
+
+      if (participantClientIds.length > 0) {
+        try {
+          const { data: dbClients, error: dbClientsErr } = await supabase
+            .from('klienci')
+            .select('*')
+            .in('id', participantClientIds);
+
+          if (!dbClientsErr && dbClients) {
+            dbClients.forEach((c: any) => {
+              clientsMap[String(c.id)] = c as Klient;
+            });
+          }
+        } catch (errDb) {
+          console.warn("Błąd pobierania profili klientów do podium:", errDb);
+        }
+      }
+
       const calculated = parts.map(u => {
-        const kObj = clientsList.find(k => String(k.id) === String(u.klient_id));
+        const kObj = clientsMap[String(u.klient_id)] || 
+          (clientsList && clientsList.find(k => String(k.id) === String(u.klient_id))) || 
+          (klienci && klienci.find(k => String(k.id) === String(u.klient_id))) || 
+          null;
+
         const sP = poms.find(p => String(p.klient_id) === String(u.klient_id) && p.etap === 'start');
         const kP = poms.find(p => String(p.klient_id) === String(u.klient_id) && p.etap === 'koniec');
 
@@ -988,13 +1021,17 @@ export default function AnalizaFormyPage() {
           totalPkt = parseFloat((pktWaga + pktFat + pktMuscle + pktVisceral).toFixed(2)) || totalPkt;
         }
 
-        const name = kObj ? `${kObj.Imię || ''} ${kObj.Nazwisko || ''}`.trim() : 'Klubowicz';
+        const firstName = kObj?.Imię || (kObj as any)?.imie || '';
+        const lastName = kObj?.Nazwisko || (kObj as any)?.nazwisko || '';
+        const fullName = `${firstName} ${lastName}`.trim();
+        const name = fullName || 'Klubowicz';
+        const avatar = kObj?.avatarUrl || kObj?.AvatarUrl || (kObj as any)?.avatar_url || null;
 
         return {
           id: u.id,
           klientId: u.klient_id,
           name,
-          avatar: kObj?.avatarUrl || kObj?.AvatarUrl || null,
+          avatar,
           totalPkt,
           deltaWagaKg,
           deltaFatProc,
@@ -1015,6 +1052,7 @@ export default function AnalizaFormyPage() {
       console.error("Błąd pobierania podium ostatniego wyzwania:", err);
     }
   };
+
   const loadEdycjaDetails = async (edycjaId: number, optionalEdycjeList?: RedukcjaEdycja[]) => {
     try {
       const [uczestnicyRes, pomiaryRes, nagrodyRes] = await Promise.all([
@@ -1073,7 +1111,6 @@ export default function AnalizaFormyPage() {
       setMeasurements([]);
     }
   };
-
   const handleSelectClient = (klient: Klient) => {
     setSelectedKlient(klient);
     setSearchQuery(`${klient.Imię || ''} ${klient.Nazwisko || ''}`.trim());
