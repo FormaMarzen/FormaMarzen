@@ -197,11 +197,14 @@ const extractClientContinuityDiscount = (client: any): number | null => {
   return null;
 };
 
-// IDENTYFIKACJA CZY KARNET TO UMOWA 12M
+// IDENTYFIKACJA CZY KARNET TO UMOWA (DOWOLNY MIANOWNIK NP. /12, /10)
 const isContractPassCheck = (karnet: any): boolean => {
   if (!karnet) return false;
   if (karnet.isContract12M === true || karnet.isContract12M === 'true') return true;
-  if (karnet.rata && String(karnet.rata).includes('/ 12')) return true;
+  if (karnet.rata && typeof karnet.rata === 'string' && karnet.rata.includes('/')) {
+    const trimmed = karnet.rata.trim();
+    if (trimmed !== '1 / 1' && trimmed !== '1/1') return true;
+  }
   const nazwa = (karnet.nazwa || karnet.pass || '').toLowerCase();
   const typ = (karnet.typKarnetu || karnet.typ_karnetu || '').toLowerCase();
   return typ.includes('umowa') || nazwa.includes('umowa') || nazwa.includes('12m') || typ.includes('12m') || typ.includes('12 miesięcy');
@@ -216,12 +219,13 @@ const isQuantityPassCheck = (karnet: any): boolean => {
   return typ.includes('ilość') || typ.includes('ilosc') || typ.includes('treningów') || typ.includes('wejść');
 };
 
-// POMOCNICZA FUNKCJA DO OBSŁUGI STANU RATY I BONUSU DLA UMOWY 12M
+// DYNAMICZNY ODCZYT STANU RATY I MIANOWNIKA (NP. 8/10, 1/12) ORAZ BONUSU
 const getContractRataInfo = (karnet: any) => {
   if (!karnet || !isContractPassCheck(karnet)) {
     return {
       isContract: false,
       rataNum: 0,
+      maxRata: 12,
       isBonusActive: false,
       totalSuspUsed: 0,
       suspensionDaysLeft: 30,
@@ -231,15 +235,17 @@ const getContractRataInfo = (karnet: any) => {
   }
 
   let rataNum = 0;
+  let maxRata = 12;
   const rataStr = String(karnet.rata || '');
   const isBonusActive = rataStr.toLowerCase().includes('bonus') || karnet.statusTekst?.includes('Bonus z zawieszenia') || karnet.bonusActivated === true;
 
   if (isBonusActive) {
     rataNum = 13;
   } else {
-    const match = rataStr.match(/(\d+)\s*\/\s*12/);
+    const match = rataStr.match(/(\d+)\s*\/\s*(\d+)/);
     if (match) {
       rataNum = parseInt(match[1], 10);
+      maxRata = parseInt(match[2], 10) || 12;
     }
   }
 
@@ -248,13 +254,14 @@ const getContractRataInfo = (karnet: any) => {
     ? Number(karnet.totalSuspendedDaysUsed)
     : Math.max(0, 30 - daysLeft);
 
-  const is12thPaid = rataNum >= 12 && !isBonusActive;
-  const canActivateBonus = is12thPaid && totalSuspUsed > 0 && !isBonusActive && !karnet.bonusClaimed;
-  const isFullyPaid = (is12thPaid && !canActivateBonus) || isBonusActive;
+  const isMaxPaid = rataNum >= maxRata && !isBonusActive;
+  const canActivateBonus = isMaxPaid && totalSuspUsed > 0 && !isBonusActive && !karnet.bonusClaimed;
+  const isFullyPaid = (isMaxPaid && !canActivateBonus) || isBonusActive;
 
   return {
     isContract: true,
     rataNum,
+    maxRata,
     isBonusActive,
     totalSuspUsed,
     suspensionDaysLeft: daysLeft,
@@ -749,7 +756,7 @@ export default function KarnetyPage() {
     };
   };
 
-  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW (Z JEDNORAZOWYM RABATEM AMBASADORA I PRECYZYJNYM OZNACZENIEM TIER_ID)
+  // INTELIGENTNY SYSTEM NALICZANIA RABATÓW
   const getEffectiveDiscount = (client: any, isTargetContract: boolean = false, basePriceToCheck?: number, targetPassNameToCheck?: string) => {
     if (!client) return { 
       percent: 0, 
@@ -1117,7 +1124,7 @@ export default function KarnetyPage() {
                     return {
                       ...k,
                       zeroEntriesGraceUntil: tomorrowStr,
-                      statusTekst: `Wykorzystano wejścia (wygasa ${tomorrowStr} • zachowaj ciągłość)`
+                      statusTekst: `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`
                     };
                   }
                 }
@@ -1317,12 +1324,11 @@ export default function KarnetyPage() {
                   ambTargetPass = highestMatchedTier.target_pass_name || 'all';
                   ambTierId = highestMatchedTier.id;
 
-                  // Sprawdzamy, czy ten konkretny próg został już skonsumowany przez Ambasadora
                   const claimedTierId = c.ambassador_claimed_tier_id ? Number(c.ambassador_claimed_tier_id) : null;
                   if (claimedTierId !== highestMatchedTier.id) {
                     ambDiscountPercent = Number(highestMatchedTier.ambassador_discount_percent) || 0;
                   } else {
-                    ambDiscountPercent = 0; // Rabat z tego poziomu został już wykorzystany na wcześniejszy karnet/ratę!
+                    ambDiscountPercent = 0;
                   }
                 }
               }
@@ -1700,7 +1706,7 @@ export default function KarnetyPage() {
     return true;
   });
 
-  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY 12M DO KOŃCA MIESIĄCA KALENDARZOWEGO
+  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY UMOWY (Z PEŁNĄ DYNAMICZNĄ OBSŁUGĄ MIANOWNIKA X/Y)
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend || isProcessingPayment || isSubmittingRef.current) return;
@@ -1736,7 +1742,7 @@ export default function KarnetyPage() {
       if (contractInfo.canActivateBonus) {
         isBonus13thPeriod = true;
         bonusDaysAmount = contractInfo.totalSuspUsed;
-        nextRataStr = 'Bonus / 12';
+        nextRataStr = `Bonus / ${contractInfo.maxRata || 12}`;
 
         let baseDate = new Date();
         if (passToExtend.waznyDo) {
@@ -1750,8 +1756,9 @@ export default function KarnetyPage() {
         nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
         basePriceNum = 0;
       } else {
-        const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
-        nextRataStr = `${nextRataNum} / 12`;
+        const maxRata = contractInfo.maxRata || 12;
+        const nextRataNum = Math.min(maxRata, contractInfo.rataNum + 1);
+        nextRataStr = `${nextRataNum} / ${maxRata}`;
         nowaDataWygasnieciaStr = getContractEndOfMonthDate(passToExtend.waznyDo);
       }
     } else {
@@ -1831,7 +1838,6 @@ export default function KarnetyPage() {
       finalCyklInt = finalCyklInt + 1;
     }
 
-    // Jeśli Ambasador skorzystał z rabatu w tej płatności, rejestrujemy wykorzystany poziom
     const ambassadorClaimedTierToPersist = (effectiveDiscount.ambassadorPercent > 0 && effectiveDiscount.ambassadorTierId)
       ? effectiveDiscount.ambassadorTierId
       : null;
@@ -1854,12 +1860,25 @@ export default function KarnetyPage() {
         defKarnetId: defKarnetu?.id || null,
         kod_rabatowy: appliedDiscountCode?.kod || null,
         appliedDiscountCodeId: appliedDiscountCode?.id || null,
-        ambassador_claimed_tier_id: ambassadorClaimedTierToPersist
+        ambassador_claimed_tier_id: ambassadorClaimedTierToPersist,
+        isContract,
+        contractPassId: passToExtend.id,
+        contractPassName: passToExtend.nazwa,
+        currentRata: nextRataStr,
+        rata: nextRataStr,
+        targetPaidUntil: nowaDataWygasnieciaStr,
+        umowa_oplacona_do: isContract ? nowaDataWygasnieciaStr : null
       };
 
       setIsExtendModalOpen(false);
       resetDiscountState();
-      await redirectToAutopay(amountToPayAutopay, orderId, opisOperacji, 'pass_extend', passMetadata);
+      await redirectToAutopay(
+        amountToPayAutopay, 
+        orderId, 
+        opisOperacji, 
+        isContract ? 'contract_installment' : 'pass_extend', 
+        passMetadata
+      );
       return;
     }
 
@@ -2005,6 +2024,7 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
+
   // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2184,7 +2204,6 @@ export default function KarnetyPage() {
       finalCyklInt = finalCyklInt + 1;
     }
 
-    // Jeśli Ambasador skorzystał z rabatu w tym zakupie, zapisujemy wykorzystany poziom
     const ambassadorClaimedTierToPersist = (effectiveDiscount.ambassadorPercent > 0 && effectiveDiscount.ambassadorTierId)
       ? effectiveDiscount.ambassadorTierId
       : null;
@@ -2343,7 +2362,6 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
@@ -3616,7 +3634,7 @@ export default function KarnetyPage() {
             <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
               <div className="flex items-center justify-between border-b border-sky-100 pb-3">
                 <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider flex items-center gap-2">
-                  <span>🎟️️</span> ZAKUP NOWEGO KARNETU ILOŚCIOWEGO
+                  <span>🎟</span> ZAKUP NOWEGO KARNETU ILOŚCIOWEGO
                 </h3>
                 <button 
                   onClick={() => { setIsQuantityTransferModalOpen(false); setPendingQuantityPassData(null); }} 
@@ -3685,7 +3703,7 @@ export default function KarnetyPage() {
           } else if (defKarnetu) {
             basePrice = parseFloat(defKarnetu.cena) || 0;
           } else {
-            basePrice = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]+/g, "")) || 0;
+            basePrice = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]/g, "")) || 0;
           }
 
           const isBonus13Period = contractInfo.canActivateBonus;
@@ -3696,7 +3714,10 @@ export default function KarnetyPage() {
 
           const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePrice, passToExtend.nazwa);
           const { finalPrice, appliedLabel } = calculateFinalPrice(basePrice, effectiveDiscount, appliedDiscountCode);
-          const nextRataNum = Math.min(12, contractInfo.rataNum + 1);
+          
+          const maxRataVal = contractInfo.maxRata || 12;
+          const nextRataNum = Math.min(maxRataVal, contractInfo.rataNum + 1);
+          const nextRataStr = `${nextRataNum} / ${maxRataVal}`;
 
           const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
           const walletDeduction = (!isBonus13Period && useWalletFunds && finalPrice > 0) ? Math.min(currentWalletNum, finalPrice) : 0;
@@ -3721,12 +3742,12 @@ export default function KarnetyPage() {
                       <div className="space-y-1">
                         <span className="font-bold text-purple-900 block text-sm">🎉 Bezpłatny okres bonusowy (+{contractInfo.totalSuspUsed} dni)</span>
                         <p className="text-[11px] text-slate-600 leading-relaxed">
-                          W trakcie trwania 12-miesięcznej umowy wykorzystano łącznie <strong>{contractInfo.totalSuspUsed} dni zawieszenia</strong>. Okres ten zostaje doliczony jako bezpłatne przedłużenie Twojego karnetu.
+                          W trakcie trwania umowy wykorzystano łącznie <strong>{contractInfo.totalSuspUsed} dni zawieszenia</strong>. Okres ten zostaje doliczony jako bezpłatne przedłużenie Twojego karnetu.
                         </p>
                       </div>
                     ) : isContract ? (
                       <div>
-                        <span>Opłacasz kolejną ratę (<strong>{nextRataNum} / 12</strong>) do końca miesiąca kalendarzowego dla umowy:</span>
+                        <span>Opłacasz kolejną ratę (<strong>{nextRataStr}</strong>) do końca miesiąca kalendarzowego dla umowy:</span>
                         <strong className="block text-sm mt-1">{passToExtend.nazwa}</strong>
                       </div>
                     ) : (
@@ -3960,7 +3981,7 @@ export default function KarnetyPage() {
 
                   {!effectiveDiscount.isPassQualifiedForReferee && effectiveDiscount.refereePercent > 0 && (
                     <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-[11px] font-bold">
-                      ℹ️️ Twój rabat powitalny z polecenia ({effectiveDiscount.refereePercent}%) przysługuje na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
+                      ℹ️ Twój rabat powitalny z polecenia ({effectiveDiscount.refereePercent}%) przysługuje na karnet OPEN. Przy tym karnecie obowiązują standardowe zniżki klubowe.
                     </div>
                   )}
 
@@ -4172,7 +4193,6 @@ export default function KarnetyPage() {
       </div>
     );
   }
-
   // PANEL ADMINISTRATORA / TRENERA
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased relative">
