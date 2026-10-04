@@ -17,9 +17,34 @@ function extractXmlTag(xml: string, tag: string): string {
 function isContractPass(k: any): boolean {
   if (!k) return false;
   if (k.isContract12M === true || k.isContract12M === 'true') return true;
+  if (k.rata && typeof k.rata === 'string' && k.rata.includes('/')) {
+    const trimmed = k.rata.trim();
+    if (trimmed !== '1 / 1' && trimmed !== '1/1') return true;
+  }
   const lower = (k.nazwa || k.pass || '').toLowerCase();
   const typ = (k.typKarnetu || k.typ_karnetu || '').toLowerCase();
-  return typ.includes('umowa') || lower.includes('umowa') || lower.includes('12m') || typ.includes('12m');
+  return typ.includes('umowa') || lower.includes('umowa') || lower.includes('12m') || typ.includes('12m') || typ.includes('12 miesięcy');
+}
+
+// DYNAMICZNY KALKULATOR KOLEJNEJ RATY Z ZACHOWANIEM ANEKSÓW / SKRÓCONYCH UMÓW (NP. 8 / 10 ZAMIAST 1 / 12)
+function calculateNextRata(currentRataStr?: string | null, fallbackMax: number = 12): { nextRata: number; maxRata: number; rataDisplay: string } {
+  let currentRataNum = 0;
+  let maxRata = fallbackMax;
+
+  if (currentRataStr && typeof currentRataStr === 'string' && currentRataStr.includes('/')) {
+    const parts = currentRataStr.split('/');
+    const parsedCurrent = parseInt(parts[0].trim(), 10);
+    const parsedMax = parseInt(parts[1].trim(), 10);
+    if (!isNaN(parsedCurrent)) currentRataNum = parsedCurrent;
+    if (!isNaN(parsedMax) && parsedMax > 0) maxRata = parsedMax;
+  }
+
+  const nextRata = Math.min(maxRata, currentRataNum + 1);
+  return {
+    nextRata,
+    maxRata,
+    rataDisplay: `${nextRata} / ${maxRata}`
+  };
 }
 
 // OBLICZANIE OSTATNIEGO DNIA MIESIĄCA KALENDARZOWEGO (RÓWNIEŻ PRZY PŁATNOŚCIACH Z WYPRZEDZENIEM)
@@ -192,7 +217,7 @@ async function sendPushToAdmins(title: string, body: string, url: string = '/rap
       }
     };
 
-    // 1. Sprawdzenie dedykowanej tabeli push_subscriptions (rola admin lub Twój e-mail)
+    // 1. Sprawdzenie dedykowanej tabeli push_subscriptions
     const { data: adminSubs } = await supabase
       .from('push_subscriptions')
       .select('*')
@@ -392,9 +417,7 @@ export async function POST(req: Request) {
         if (targetOrderId) {
           await supabase
             .from('orders')
-            .update({
-              status: 'opłacone'
-            })
+            .update({ status: 'opłacone' })
             .eq('id', targetOrderId);
         } else {
           const customerEmail = gatewayResponse.email || (klient ? (klient['E-mail'] || klient.email) : '');
@@ -631,27 +654,30 @@ export async function POST(req: Request) {
           }
 
           let passName = metadata.contractPassName || 'OPEN - umowa 12 miesięcy';
+          
+          // Bezpieczne wyliczenie kolejnej raty z zachowaniem skróconego mianownika (np. 8 / 10)
+          const existingContract = parsedKarnety.find((k: any) => 
+            isContractPass(k) || (metadata.contractPassId && String(k.id) === String(metadata.contractPassId))
+          );
+
           let updatedRataDisplay = '1 / 12';
+          if (existingContract) {
+            passName = existingContract.nazwa || passName;
+            const { rataDisplay } = calculateNextRata(existingContract.rata, 12);
+            updatedRataDisplay = rataDisplay;
+          } else if (metadata.currentRata || metadata.rata) {
+            const { rataDisplay } = calculateNextRata(metadata.currentRata || metadata.rata, 12);
+            updatedRataDisplay = rataDisplay;
+          }
 
           const updatedKarnety = parsedKarnety.map((k: any) => {
             if (isContractPass(k) || (metadata.contractPassId && String(k.id) === String(metadata.contractPassId))) {
               passName = k.nazwa || passName;
-              let currentRataNum = 1;
-              let maxRata = 12;
-
-              if (typeof k.rata === 'string' && k.rata.includes('/')) {
-                const parts = k.rata.split('/');
-                currentRataNum = parseInt(parts[0].trim(), 10) || 1;
-                maxRata = parseInt(parts[1].trim(), 10) || 12;
-              }
-
-              const nextRata = Math.min(maxRata, currentRataNum + 1);
-              updatedRataDisplay = `${nextRata} / ${maxRata}`;
-
               return {
                 ...k,
                 waznyDo: targetPaidUntil,
                 rata: updatedRataDisplay,
+                isContract12M: true,
                 blokadaDo: null,
                 powodBlokady: null,
                 statusTekst: `Umowa 12M (Rata ${updatedRataDisplay} • Ważny do: ${targetPaidUntil})`
@@ -659,6 +685,21 @@ export async function POST(req: Request) {
             }
             return k;
           });
+
+          if (!existingContract) {
+            updatedKarnety.push({
+              id: Date.now(),
+              nazwa: passName,
+              waznyDo: targetPaidUntil,
+              cena: `${transactionAmount.toFixed(2)} PLN`,
+              rata: updatedRataDisplay,
+              isContract12M: true,
+              contractSuspensionDaysLeft: 30,
+              blokadaDo: null,
+              powodBlokady: null,
+              statusTekst: `Umowa 12M (Rata ${updatedRataDisplay} • Ważny do: ${targetPaidUntil})`
+            });
+          }
 
           const clientUpdatePayload: Record<string, any> = {
             umowa_oplacona_do: targetPaidUntil,
@@ -690,9 +731,9 @@ export async function POST(req: Request) {
           await supabase.from('booking_logs').insert([{
             action_type: 'CONTRACT_PAID_AUTOPAY',
             status: 'SUCCESS',
-            reason: `Klubowicz ID:${klient.id} opłacił ratę umowy online Autopay do ${targetPaidUntil}. Zdjęto blokadę ratalną.`,
+            reason: `Klubowicz ID:${klient.id} opłacił ratę umowy online Autopay do ${targetPaidUntil}. Rata: ${updatedRataDisplay}. Zdjęto blokadę ratalną.`,
             rule_applied: 'contract_autopay_settlement',
-            payload: { klient_id: klient.id, amount: transactionAmount, paid_until: targetPaidUntil, order_id: orderID }
+            payload: { klient_id: klient.id, amount: transactionAmount, paid_until: targetPaidUntil, order_id: orderID, rata: updatedRataDisplay }
           }]);
 
           // PROGRAM AMBASADOR: Ewaluacja pierwszego karnetu przy racie umowy
@@ -701,7 +742,7 @@ export async function POST(req: Request) {
 
           await sendPushToAdmins(
             'Opłacono ratę umowy 12M! 💳',
-            `${clientName} opłacił(a) ratę umowy online Autopay (${transactionAmount.toFixed(2)} PLN, ważność do ${targetPaidUntil})`,
+            `${clientName} opłacił(a) ratę umowy online Autopay (${transactionAmount.toFixed(2)} PLN, Rata: ${updatedRataDisplay}, ważność do ${targetPaidUntil})`,
             '/raporty/klienci'
           );
         }
@@ -711,11 +752,40 @@ export async function POST(req: Request) {
         if (klient) {
           const clientUpdatePayload: Record<string, any> = {};
 
+          // Pobranie bieżących karnetów klienta z bazy, aby nie utracić modyfikacji wprowadzonych w panelu (np. 10 rat)
+          let existingKarnety: any[] = [];
+          if (Array.isArray(klient.karnetyKlubowicza)) {
+            existingKarnety = klient.karnetyKlubowicza;
+          } else if (typeof klient.karnetyKlubowicza === 'string') {
+            try { existingKarnety = JSON.parse(klient.karnetyKlubowicza); } catch(e) {}
+          }
+          const existingContract = existingKarnety.find(isContractPass);
+
           // WYKLUCZENIE Z CIĄGŁOŚCI KARNETÓW <= 150 ZŁ
           const isLowCostPass = transactionAmount <= 150;
 
           if (metadata.updatedKarnetyList && Array.isArray(metadata.updatedKarnetyList)) {
             clientUpdatePayload.karnetyKlubowicza = metadata.updatedKarnetyList.map((k: any) => {
+              // JEŻELI PRZEDŁUŻANA JEST UMOWA: Wymuś zachowanie dynamicznego mianownika z profilu klienta
+              if (isContractPass(k)) {
+                if (existingContract) {
+                  const { rataDisplay } = calculateNextRata(existingContract.rata, 12);
+                  k.rata = rataDisplay;
+                  k.isContract12M = true;
+                  if (existingContract.contractSuspensionDaysLeft !== undefined) {
+                    k.contractSuspensionDaysLeft = existingContract.contractSuspensionDaysLeft;
+                  }
+                  k.statusTekst = `Umowa 12M (Rata ${rataDisplay} • Ważny do: ${k.waznyDo})`;
+                  k.blokadaDo = null;
+                  k.powodBlokady = null;
+                } else if (k.rata && k.rata.includes('/')) {
+                  const { rataDisplay } = calculateNextRata(k.rata, 12);
+                  k.rata = rataDisplay;
+                  k.isContract12M = true;
+                  k.statusTekst = `Umowa 12M (Rata ${rataDisplay} • Ważny do: ${k.waznyDo})`;
+                }
+              }
+
               const passPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
               if (passPrice <= 150 || isLowCostPass) {
                 if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
