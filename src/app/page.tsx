@@ -73,8 +73,9 @@ const getContractEndOfMonthDate = (baseDateStr?: string | null): string => {
 
 // PRECYZYJNY PARSER DATY Z CLASS_KEY
 const parseDateFromClassKey = (classKey: string): Date => {
-  const parts = classKey ? String(classKey).split('_') : [];
-  const datePart = parts[1] || '';
+  if (!classKey) return new Date();
+  const lastUnderscore = classKey.lastIndexOf('_');
+  const datePart = lastUnderscore !== -1 ? classKey.substring(lastUnderscore + 1) : '';
   const currentYear = new Date().getFullYear();
 
   if (!datePart) return new Date();
@@ -107,7 +108,7 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
-// POWIADOMIENIA DLA TRENERÓW (ŚCIŚLE 1X NA 5 MIN PRZED I 1X PO OSTATNIM TRENINGU, BEZ DUBLETIW)
+// POWIADOMIENIA DLA TRENERÓW (ŚCIŚLE 1X NA 5 MIN PRZED I 1X PO OSTATNIM TRENINGU, BEZ DUBLI)
 const checkAndSendTrainerReminders = async (
   classes: any[],
   jednorazowe: any[],
@@ -118,7 +119,6 @@ const checkAndSendTrainerReminders = async (
   currentUserEmail?: string
 ) => {
   try {
-    // BLOKADA: Zwykli klubowicze przeglądający grafik nie mogą triggerować alertów trenera
     if (currentRole === 'klubowicz') return;
 
     const now = new Date();
@@ -176,12 +176,10 @@ const checkAndSendTrainerReminders = async (
 
       const trainerEmail = (trainerObj?.email || '').trim().toLowerCase();
 
-      // Wykluczenie administratora z powiadomień
       if (!trainerEmail || trainerEmail === 'maciejklaput@gmail.com') {
         continue;
       }
 
-      // Trener sprawdza i wysyła powiadomienia wyłącznie dla samego siebie
       if (currentRole === 'trener' && currentUserEmail && trainerEmail !== currentUserEmail.toLowerCase().trim()) {
         continue;
       }
@@ -196,7 +194,6 @@ const checkAndSendTrainerReminders = async (
         const classStartMinutes = sh * 60 + sm;
         const diffMinutes = classStartMinutes - currentTotalMinutes;
 
-        // Okno czasowe: od 5 minut przed startem do momentu rozpoczęcia (0 min)
         if (diffMinutes <= 5 && diffMinutes >= 0) {
           const tag5min = `REMINDER_5MIN_${cls.classKey}_${todayIso}`;
           const storageKey = `fm_trainer_rem_5min_${cls.classKey}_${todayIso}`;
@@ -205,7 +202,6 @@ const checkAndSendTrainerReminders = async (
             continue;
           }
 
-          // Weryfikacja bazy danych zapobiegająca duplikacji
           const { data: existingLog } = await supabase
             .from('booking_logs')
             .select('id')
@@ -214,7 +210,6 @@ const checkAndSendTrainerReminders = async (
             .limit(1);
 
           if (!existingLog || existingLog.length === 0) {
-            // Natychmiastowa rezerwacja w logach
             await supabase.from('booking_logs').insert([{
               action_type: 'TRAINER_REMINDER_5MIN',
               status: 'SUCCESS',
@@ -271,7 +266,6 @@ const checkAndSendTrainerReminders = async (
         }
       });
 
-      // Okno: od razu po zakończeniu ostatniego treningu (do 120 minut po)
       const minutesAfterLastClass = currentTotalMinutes - latestEndMinutes;
       if (minutesAfterLastClass >= 0 && minutesAfterLastClass <= 120) {
         const tagEndOfDay = `REMINDER_END_OF_DAY_${trainerEmail}_${todayIso}`;
@@ -289,7 +283,6 @@ const checkAndSendTrainerReminders = async (
           .limit(1);
 
         if (!existingEndLog || existingEndLog.length === 0) {
-          // Natychmiastowa rezerwacja w logach
           await supabase.from('booking_logs').insert([{
             action_type: 'TRAINER_REMINDER_END_OF_DAY',
             status: 'SUCCESS',
@@ -358,7 +351,7 @@ export default function DashboardPage() {
   const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
   const isSubmittingRef = useRef(false);
 
-  // POMOCNIK GENEROWANIA WARIANTÓW CLASS_KEY
+  // POMOCNIK GENEROWANIA WARIANTÓW CLASS_KEY (ODPORNY NA PREFIKSY NP. j_15)
   const getKeysVariants = (classId: string | number, dateStr: string) => {
     const keys = new Set<string>();
     if (!dateStr) return [`${classId}`];
@@ -623,6 +616,7 @@ export default function DashboardPage() {
 
     return false;
   };
+
   // STANY DANYCH I WIDOKU
   const [adminViewTab, setAdminViewTab] = useState<'grafik' | 'operacje'>('grafik');
   const [clientSearch, setClientSearch] = useState('');
@@ -748,7 +742,7 @@ export default function DashboardPage() {
     auto_cancel_deadline_per_class: {},
   });
 
-  // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ
+  // PRECYZYJNY HELPER ROZWIĄZYWANIA ZAJĘĆ (ODPORNY NA PREFIKS j_ I INNE WARIANTY)
   const findClassDetails = (classId: string | number, dateStr: string) => {
     if (!dateStr) return null;
     let d = 1, m = 1;
@@ -944,7 +938,6 @@ export default function DashboardPage() {
       workout: list[workoutIndex]
     };
   };
-
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -1087,16 +1080,25 @@ export default function DashboardPage() {
       const allClasses = [...stdDnia, ...jednorazDnia];
 
       for (const cls of allClasses) {
-        if (cls.isOdwołane || cls.isUsunięte) continue;
+        // ZABEZPIECZENIE: Ręcznie przywrócone zajęcia mają blokadę ponownego automatycznego odwoływania
+        if (cls.isOdwołane || cls.isUsunięte || cls.prevent_auto_cancel || cls.manual_restore) continue;
 
-        const trainingName = cls.title || '';
-        const minRequired = rules.min_participants_per_class?.[trainingName] !== undefined
-          ? rules.min_participants_per_class[trainingName]
-          : rules.min_participants;
-        
-        const deadlineMins = rules.auto_cancel_deadline_per_class?.[trainingName] !== undefined
-          ? rules.auto_cancel_deadline_per_class[trainingName]
-          : rules.auto_cancel_deadline_minutes;
+        const trainingName = (cls.title || '').trim();
+        let minRequired = rules.min_participants;
+        if (rules.min_participants_per_class) {
+          const foundKey = Object.keys(rules.min_participants_per_class).find(k => areClassNamesMatching(k, trainingName));
+          if (foundKey && rules.min_participants_per_class[foundKey] !== null && rules.min_participants_per_class[foundKey] !== undefined) {
+            minRequired = rules.min_participants_per_class[foundKey];
+          }
+        }
+
+        let deadlineMins = rules.auto_cancel_deadline_minutes;
+        if (rules.auto_cancel_deadline_per_class) {
+          const foundKey = Object.keys(rules.auto_cancel_deadline_per_class).find(k => areClassNamesMatching(k, trainingName));
+          if (foundKey && rules.auto_cancel_deadline_per_class[foundKey] !== null && rules.auto_cancel_deadline_per_class[foundKey] !== undefined) {
+            deadlineMins = rules.auto_cancel_deadline_per_class[foundKey];
+          }
+        }
 
         if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
           const [dStr, mStr] = col.date.split('/');
@@ -1106,13 +1108,20 @@ export default function DashboardPage() {
           const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
           if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
-            const classSignups = signupsMap[cls.classKey] || [];
+            const allVariantKeys = getKeysVariants(cls.id, col.date);
+            
+            // BEZPOŚREDNIA WERYFIKACJA W SUPABASE (OCHRONA PEŁNYCH GRUP)
+            const { data: liveDbParticipants } = await supabase
+              .from('zapisy_zajec')
+              .select('*')
+              .in('class_key', allVariantKeys);
+
+            const classSignups = liveDbParticipants || [];
             const activeSignups = classSignups.filter((s: any) => s.status === 'zapisany');
 
             if (activeSignups.length < minRequired) {
               hasChanges = true;
               
-              const allVariantKeys = getKeysVariants(cls.id, col.date);
               for (const vKey of allVariantKeys) {
                 await supabase.from('nadpisania_zajec').upsert({
                   class_key: vKey,
@@ -1121,7 +1130,8 @@ export default function DashboardPage() {
                   trainer: cls.trainer,
                   limit: cls.limit,
                   is_odwolane: true,
-                  is_usuniete: false
+                  is_usuniete: false,
+                  prevent_auto_cancel: false
                 });
               }
 
@@ -1132,8 +1142,9 @@ export default function DashboardPage() {
               const durationText = calculateDuration(cls.start, cls.end);
 
               for (const participant of classSignups) {
-                participantIds.push(participant.id);
-                const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
+                participantIds.push(participant.klient_id || participant.id);
+                const pId = participant.klient_id || participant.id;
+                const { data: clientData } = await supabase.from('klienci').select('*').eq('id', pId).maybeSingle();
                 if (clientData) {
                   let parsedKarnety = [];
                   if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
@@ -1149,11 +1160,11 @@ export default function DashboardPage() {
                       pozostaloWejsc: currentRemaining + 1,
                       zeroEntriesGraceUntil: null
                     };
-                    await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', participant.id);
+                    await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', pId);
                   }
 
                   await supabase.from('transakcje').insert([{
-                    klient_id: participant.id,
+                    klient_id: pId,
                     typ_operacji: 'zajecia_wypis',
                     class_key: cls.classKey,
                     opis: `Automatyczne odwołanie zajęć: ${cls.title} (${formattedDate} ${cls.start}-${cls.end || ''}, ${durationText}) z powodu zbyt małej liczby osób (${activeSignups.length}/${minRequired}). Zwrócono 1 wejście.`
@@ -1175,7 +1186,7 @@ export default function DashboardPage() {
               await supabase.from('booking_logs').insert([{
                 action_type: 'CLASS_AUTO_CANCELLED',
                 status: 'SUCCESS',
-                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${classSignups.length} osób (w tym krzesełko) i zwrócono wejścia.`,
+                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${classSignups.length} osób i zwrócono wejścia.`,
                 rule_applied: 'min_participants_auto_cancel',
                 payload: { class_key: cls.classKey, participants_count: activeSignups.length, min_required: minRequired }
               }]);
@@ -1193,16 +1204,25 @@ export default function DashboardPage() {
     displayDate: string,
     currentRemainingSignups: any[]
   ) => {
-    if (!classItem || classItem.isOdwołane || classItem.isUsunięte) return false;
+    // ZABEZPIECZENIE: Jeśli zajęcia były ręcznie przywrócone, nie odwołuj ich ponownie
+    if (!classItem || classItem.isOdwołane || classItem.isUsunięte || classItem.prevent_auto_cancel || classItem.manual_restore) return false;
     
-    const trainingName = classItem.title || '';
-    const minRequired = bookingRules.min_participants_per_class?.[trainingName] !== undefined
-      ? bookingRules.min_participants_per_class[trainingName]
-      : bookingRules.min_participants;
-    
-    const deadlineMins = bookingRules.auto_cancel_deadline_per_class?.[trainingName] !== undefined
-      ? bookingRules.auto_cancel_deadline_per_class[trainingName]
-      : bookingRules.auto_cancel_deadline_minutes;
+    const trainingName = (classItem.title || '').trim();
+    let minRequired = bookingRules.min_participants;
+    if (bookingRules.min_participants_per_class) {
+      const foundKey = Object.keys(bookingRules.min_participants_per_class).find(k => areClassNamesMatching(k, trainingName));
+      if (foundKey && bookingRules.min_participants_per_class[foundKey] !== null && bookingRules.min_participants_per_class[foundKey] !== undefined) {
+        minRequired = bookingRules.min_participants_per_class[foundKey];
+      }
+    }
+
+    let deadlineMins = bookingRules.auto_cancel_deadline_minutes;
+    if (bookingRules.auto_cancel_deadline_per_class) {
+      const foundKey = Object.keys(bookingRules.auto_cancel_deadline_per_class).find(k => areClassNamesMatching(k, trainingName));
+      if (foundKey && bookingRules.auto_cancel_deadline_per_class[foundKey] !== null && bookingRules.auto_cancel_deadline_per_class[foundKey] !== undefined) {
+        deadlineMins = bookingRules.auto_cancel_deadline_per_class[foundKey];
+      }
+    }
 
     if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
       let d = 1, m = 1;
@@ -1220,10 +1240,19 @@ export default function DashboardPage() {
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
       if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
-        const activeSignups = currentRemainingSignups.filter((s: any) => s.status === 'zapisany');
+        const allVariantKeys = getKeysVariants(classItem.id, displayDate);
+
+        // KROK KRYTYCZNY: Zawsze pytamy bazę danych w czasie rzeczywistym zamiast ufać pamięci RAM
+        const { data: liveDbEntries } = await supabase
+          .from('zapisy_zajec')
+          .select('*')
+          .in('class_key', allVariantKeys);
+
+        const realParticipants = liveDbEntries || [];
+        const activeSignups = realParticipants.filter((s: any) => s.status === 'zapisany');
+
         if (activeSignups.length < minRequired) {
           const classKey = `${classItem.id}_${displayDate}`;
-          const allVariantKeys = getKeysVariants(classItem.id, displayDate);
 
           for (const vKey of allVariantKeys) {
             await supabase.from('nadpisania_zajec').upsert({
@@ -1233,7 +1262,8 @@ export default function DashboardPage() {
               trainer: classItem.trainer,
               limit: classItem.limit || 12,
               is_odwolane: true,
-              is_usuniete: false
+              is_usuniete: false,
+              prevent_auto_cancel: false
             });
           }
 
@@ -1243,9 +1273,10 @@ export default function DashboardPage() {
           const formattedDate = `${dayName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
           const durationText = calculateDuration(classItem.start, classItem.end);
 
-          for (const participant of currentRemainingSignups) {
-            participantIds.push(participant.id);
-            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', participant.id).maybeSingle();
+          for (const participant of realParticipants) {
+            const pId = participant.klient_id || participant.id;
+            participantIds.push(pId);
+            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', pId).maybeSingle();
             if (clientData) {
               let parsedKarnety = [];
               if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
@@ -1261,11 +1292,11 @@ export default function DashboardPage() {
                   pozostaloWejsc: currentRemaining + 1,
                   zeroEntriesGraceUntil: null
                 };
-                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', participant.id);
+                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', pId);
               }
 
               await supabase.from('transakcje').insert([{
-                klient_id: participant.id,
+                klient_id: pId,
                 typ_operacji: 'zajecia_wypis',
                 class_key: classKey,
                 opis: `Automatyczne odwołanie zajęć: ${classItem.title} (${formattedDate} ${classItem.start}-${classItem.end || ''}, ${durationText}) po wypisaniu uczestnika (pozostało: ${activeSignups.length}/${minRequired} os.). Zwrócono 1 wejście.`
@@ -1286,7 +1317,7 @@ export default function DashboardPage() {
           await supabase.from('booking_logs').insert([{
             action_type: 'CLASS_AUTO_CANCELLED_ON_UNENROLL',
             status: 'SUCCESS',
-            reason: `Zajęcia ${classItem.title} (${classKey}) odwołane natychmiast po wypisaniu uczestnika (${activeSignups.length}/${minRequired} os.). Wypisano ${currentRemainingSignups.length} osób i zwrócono wejścia.`,
+            reason: `Zajęcia ${classItem.title} (${classKey}) odwołane natychmiast po wypisaniu uczestnika (${activeSignups.length}/${minRequired} os.). Wypisano ${realParticipants.length} osób i zwrócono wejścia.`,
             rule_applied: 'min_participants_auto_cancel_immediate',
             payload: { class_key: classKey, participants_count: activeSignups.length, min_required: minRequired }
           }]);
@@ -1302,14 +1333,27 @@ export default function DashboardPage() {
     if (!classItem || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
     if (classItem.isOdwołane) return { isAutoCancelled: true, reason: 'ODWOŁANE PRZEZ KLUB' };
     
-    const trainingName = classItem.title || '';
-    const minRequired = bookingRules.min_participants_per_class?.[trainingName] !== undefined
-      ? bookingRules.min_participants_per_class[trainingName]
-      : bookingRules.min_participants;
-    
-    const deadlineMins = bookingRules.auto_cancel_deadline_per_class?.[trainingName] !== undefined
-      ? bookingRules.auto_cancel_deadline_per_class[trainingName]
-      : bookingRules.auto_cancel_deadline_minutes;
+    // Ochrona ręcznie przywróconych zajęć
+    if (classItem.prevent_auto_cancel || classItem.manual_restore) {
+      return { isAutoCancelled: false, reason: '' };
+    }
+
+    const trainingName = (classItem.title || '').trim();
+    let minRequired = bookingRules.min_participants;
+    if (bookingRules.min_participants_per_class) {
+      const foundKey = Object.keys(bookingRules.min_participants_per_class).find(k => areClassNamesMatching(k, trainingName));
+      if (foundKey && bookingRules.min_participants_per_class[foundKey] !== null && bookingRules.min_participants_per_class[foundKey] !== undefined) {
+        minRequired = bookingRules.min_participants_per_class[foundKey];
+      }
+    }
+
+    let deadlineMins = bookingRules.auto_cancel_deadline_minutes;
+    if (bookingRules.auto_cancel_deadline_per_class) {
+      const foundKey = Object.keys(bookingRules.auto_cancel_deadline_per_class).find(k => areClassNamesMatching(k, trainingName));
+      if (foundKey && bookingRules.auto_cancel_deadline_per_class[foundKey] !== null && bookingRules.auto_cancel_deadline_per_class[foundKey] !== undefined) {
+        deadlineMins = bookingRules.auto_cancel_deadline_per_class[foundKey];
+      }
+    }
 
     if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
       let d = 1, m = 1;
@@ -1729,7 +1773,6 @@ export default function DashboardPage() {
         yesterdayDate.setDate(yesterdayDate.getDate() - 1);
         const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
 
-        // Zmapowanie liczby i dat przyszłych rezerwacji dla każdego klienta w celu ochrony i auto-przedłużenia
         const nowBeginning = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
         const clientFutureBookingsMap = new Map<number, number>();
         const clientFutureDatesMap = new Map<number, string[]>();
@@ -1776,7 +1819,6 @@ export default function DashboardPage() {
             continuityNotice = null;
           }
 
-          // 1. ZEROWANIE WEJŚĆ PO TERMINIE I KOREKTA BUFORA
           parsedKarnety = parsedKarnety.map((k: any) => {
             const pasujacyDef = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (k.nazwa || '').trim().toLowerCase());
             const isContract = isContractPass(k) || (pasujacyDef && isContractPass(pasujacyDef));
@@ -1798,7 +1840,6 @@ export default function DashboardPage() {
               }
             }
 
-            // Zerowanie wejść w dniu po terminie wygaśnięcia
             const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
             if (!isContract && isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0) {
               k.pozostaloWejsc = 0;
@@ -1806,7 +1847,6 @@ export default function DashboardPage() {
               karnetyZmienione = true;
             }
 
-            // OBSŁUGA WYKORZYSTANIA WSZYSTKICH WEJŚĆ
             if (isQuantity && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
               const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
               const isLowPrice = passPriceNum <= 150;
@@ -1822,14 +1862,12 @@ export default function DashboardPage() {
                   k.statusTekst = labelWejsc;
                 }
               } else if (hasFutureBookings) {
-                // Jeśli wejścia zostały zarezerwowane w grafiku na przyszłość, bufor 24h NIE MOŻE się włączyć!
                 if (k.zeroEntriesGraceUntil !== null) {
                   k.zeroEntriesGraceUntil = null;
                   karnetyZmienione = true;
                 }
                 k.statusTekst = `Zarezerwowano wejścia (wygasa ${k.waznyDo})`;
               } else {
-                // Bufor 24h włącza się tylko przy faktycznym braku wejść i braku przyszłych rezerwacji
                 const tomorrowDate = new Date();
                 tomorrowDate.setDate(tomorrowDate.getDate() + 1);
                 const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
@@ -1851,7 +1889,6 @@ export default function DashboardPage() {
             return k;
           });
 
-          // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (TYLKO DLA KARNETÓW CZASOWYCH!)
           const waitingPassIndex = parsedKarnety.findIndex((k: any, idx: number) =>
             idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
           );
@@ -1864,7 +1901,6 @@ export default function DashboardPage() {
             const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) ||
                                        (isTimeBased && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
 
-            // Rotacja na kolejny zakupiony karnet
             if (isPrimaryFinished && waitingPassIndex !== -1) {
               const nextPass = parsedKarnety[waitingPassIndex];
               const defNext = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (nextPass.nazwa || '').trim().toLowerCase());
@@ -1890,9 +1926,7 @@ export default function DashboardPage() {
               };
               karnetyZmienione = true;
               primaryPass = parsedKarnety[0];
-            }
-            // Auto-przedłużenie: WYŁĄCZNIE dla karnetów czasowych (OPEN)! Karnety ilościowe NIGDY nie są auto-przedłużane do debetu!
-            else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
+            } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
               const hasBookingsAfterExpiry = futureDates.some(bDate => bDate > (primaryPass.waznyDo || todayDateOnly));
               if (hasBookingsAfterExpiry) {
                 const defKarnetu = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (primaryPass.nazwa || '').trim().toLowerCase());
@@ -2153,11 +2187,15 @@ export default function DashboardPage() {
             trainer: n.trainer, 
             limit: n.limit, 
             isOdwołane: n.is_odwolane, 
-            isUsunięte: n.is_usuniete 
+            isUsunięte: n.is_usuniete,
+            prevent_auto_cancel: n.prevent_auto_cancel || n.manual_restore || false,
+            manual_restore: n.prevent_auto_cancel || n.manual_restore || false
           };
           nadpisaniaMap[n.class_key] = itemVal;
           if (n.class_key && n.class_key.includes('_')) {
-            const [cId, dPart] = n.class_key.split('_');
+            const lastUnderscore = n.class_key.lastIndexOf('_');
+            const cId = n.class_key.substring(0, lastUnderscore);
+            const dPart = n.class_key.substring(lastUnderscore + 1);
             const variants = getKeysVariants(cId, dPart);
             variants.forEach(vk => { nadpisaniaMap[vk] = itemVal; });
           }
@@ -2186,8 +2224,11 @@ export default function DashboardPage() {
           if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
           groupedZapisy[z.class_key].push(entry);
 
+          // POPRAWKA: Używamy lastIndexOf('_') do poprawnego wydobycia ID zajęć jednorazowych (np. j_15)
           if (z.class_key && z.class_key.includes('_')) {
-            const [classId, datePart] = z.class_key.split('_');
+            const lastUnderscore = z.class_key.lastIndexOf('_');
+            const classId = z.class_key.substring(0, lastUnderscore);
+            const datePart = z.class_key.substring(lastUnderscore + 1);
             const allVariants = getKeysVariants(classId, datePart);
             allVariants.forEach(vKey => {
               if (!groupedZapisy[vKey]) groupedZapisy[vKey] = [];
@@ -2293,7 +2334,6 @@ export default function DashboardPage() {
   useEffect(() => {
     loadData();
 
-    // Wykluczenie tabeli czat_wiadomosci zapobiega nieskończonej pętli i wielokrotnym powiadomieniom
     const channel = supabase
       .channel('realtime-dashboard')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => loadData())
@@ -2469,7 +2509,8 @@ export default function DashboardPage() {
         trainer: editTrainer,
         limit: newLimitNum,
         is_odwolane: editClassModalData.isOdwołane || false,
-        is_usuniete: editClassModalData.isUsunięte || false
+        is_usuniete: editClassModalData.isUsunięte || false,
+        prevent_auto_cancel: editClassModalData.prevent_auto_cancel || false
       });
     }
 
@@ -2600,31 +2641,33 @@ export default function DashboardPage() {
         trainer: item.trainer || '',
         limit: item.limit || 12,
         is_odwolane: true,
-        is_usuniete: item.isUsunięte || false
+        is_usuniete: item.isUsunięte || false,
+        prevent_auto_cancel: false
       }));
       await supabase.from('nadpisania_zajec').insert(rowsToInsert);
     } else {
-      if (item.isUsunięte) {
-        const rowsToInsert = allVariantKeys.map(vKey => ({
-          class_key: vKey,
-          start: item.start || '08:00',
-          end: item.end || '09:00',
-          trainer: item.trainer || '',
-          limit: item.limit || 12,
-          is_odwolane: false,
-          is_usuniete: item.isUsunięte || false
-        }));
-        await supabase.from('nadpisania_zajec').insert(rowsToInsert);
-      }
+      // PRZYWRÓCENIE ZAJĘĆ (WYMÓG 1): Trwałe zabezpieczenie przed ponownym autoodwołaniem
+      const rowsToInsert = allVariantKeys.map(vKey => ({
+        class_key: vKey,
+        start: item.start || '08:00',
+        end: item.end || '09:00',
+        trainer: item.trainer || '',
+        limit: item.limit || 12,
+        is_odwolane: false,
+        is_usuniete: item.isUsunięte || false,
+        prevent_auto_cancel: true,
+        manual_restore: true
+      }));
+      await supabase.from('nadpisania_zajec').insert(rowsToInsert);
     }
 
     setNadpisaneZajeciaDni(prev => {
       const updated = { ...prev };
       allVariantKeys.forEach(k => {
         if (nextOdwołaneState) {
-          updated[k] = { ...item, isOdwołane: true, isUsunięte: item.isUsunięte || false };
+          updated[k] = { ...item, isOdwołane: true, isUsunięte: item.isUsunięte || false, prevent_auto_cancel: false };
         } else {
-          delete updated[k];
+          updated[k] = { ...item, isOdwołane: false, isUsunięte: item.isUsunięte || false, prevent_auto_cancel: true, manual_restore: true };
         }
       });
       return updated;
@@ -2633,11 +2676,13 @@ export default function DashboardPage() {
     await supabase.from('transakcje').insert([{
       typ_operacji: nextOdwołaneState ? 'odwolanie_zajec' : 'przywrocenie_zajec',
       class_key: classKey,
-      opis: nextOdwołaneState ? `Odwołano zajęcia: "${item.title}" (${displayDate} ${item.start}) z poziomu grafiku` : `Przywrócono odwołane zajęcia: "${item.title}" (${displayDate} ${item.start})`
+      opis: nextOdwołaneState 
+        ? `Odwołano zajęcia: "${item.title}" (${displayDate} ${item.start}) z poziomu grafiku` 
+        : `Przywrócono odwołane zajęcia: "${item.title}" (${displayDate} ${item.start}) - zabezpieczono przed automatycznym odwołaniem.`
     }]);
 
     await loadData();
-    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
+    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone i zabezpieczone przed autoodwołaniem!");
   };
 
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
@@ -2774,9 +2819,10 @@ export default function DashboardPage() {
         if (excludeClassKey && signup.class_key === excludeClassKey) {
           continue;
         }
-        const parts = (signup.class_key || '').split('_');
-        const classId = parts[0];
-        const dateStr = parts[1];
+        const lastUnderscore = (signup.class_key || '').lastIndexOf('_');
+        const classId = lastUnderscore !== -1 ? signup.class_key.substring(0, lastUnderscore) : signup.class_key;
+        const dateStr = lastUnderscore !== -1 ? signup.class_key.substring(lastUnderscore + 1) : '';
+
         if (dateStr) {
           const classDetails = findClassDetails(classId, dateStr);
           if (classDetails) {
@@ -2816,7 +2862,7 @@ export default function DashboardPage() {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10) || 0;
         updatedKarnety[passIndex] = {
           ...updatedKarnety[passIndex],
-          pozostaloWejsc: currentRemaining + cancelledCount,
+          pozostaloWejsc: currentRemaining + 1,
           zeroEntriesGraceUntil: null
         };
         await supabase.from('klienci').update({ karnetyKlubowicza: updatedKarnety }).eq('id', klientId);
@@ -2842,9 +2888,10 @@ export default function DashboardPage() {
 
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
-        const parts = (signup.class_key || '').split('_');
-        const classId = parts[0];
-        const dateStr = parts[1];
+        const lastUnderscore = (signup.class_key || '').lastIndexOf('_');
+        const classId = lastUnderscore !== -1 ? signup.class_key.substring(0, lastUnderscore) : signup.class_key;
+        const dateStr = lastUnderscore !== -1 ? signup.class_key.substring(lastUnderscore + 1) : '';
+
         if (dateStr) {
           const classDetails = findClassDetails(classId, dateStr);
           if (classDetails) {
@@ -2917,7 +2964,6 @@ export default function DashboardPage() {
     const allowedClasses = defKarnetu?.zaznaczoneZajecia || [];
     const dostepDo = defKarnetu?.dostep_do_zajec || 'wszystkich zajęć';
     
-    // WYKLUCZENIE Z CIĄGŁOŚCI DLA <= 150 ZŁ
     const effectiveDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCenaNum);
     const finalPriceNum = (effectiveDiscount.percent > 0 && !isContract && bazowaCenaNum > 150)
       ? bazowaCenaNum * (1 - effectiveDiscount.percent / 100) 
@@ -2999,7 +3045,6 @@ export default function DashboardPage() {
     let karnetyList = Array.isArray(currentUser.karnetyKlubowicza) ? [...currentUser.karnetyKlubowicza] : [];
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     
-    // WYKLUCZENIE Z CIĄGŁOŚCI DLA <= 150 ZŁ
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum);
     const cenaWartosc = (effectiveDiscount.percent > 0 && !isContract && basePriceNum > 150)
       ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
@@ -3041,7 +3086,6 @@ export default function DashboardPage() {
       };
       updatedKarnety = [...karnetyList, nowyKarnetObj];
     } else if (isQuantityPassBuy) {
-      // PRZENIESIENIE NIEWYKORZYSTANYCH WEJŚĆ ZE STAREGO KARNETU ILOŚCIOWEGO
       const existingQuantityPass = karnetyList.find(k => isQuantityPass(k));
       let leftover = 0;
       if (existingQuantityPass) {
@@ -3123,7 +3167,7 @@ export default function DashboardPage() {
       };
       updatedKarnety = [...karnetyList, nowyKarnetObj];
     }
-    
+
     const currentWalletNum = parseFloat(currentUser.wallet.replace(/[^0-9.-]+/g, "")) || 0;
     const nowyStanPortfela = currentWalletNum - cenaWartosc;
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
@@ -3281,9 +3325,10 @@ export default function DashboardPage() {
 
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
-        const parts = (signup.class_key || '').split('_');
-        const classId = parts[0];
-        const dateStr = parts[1];
+        const lastUnderscore = (signup.class_key || '').lastIndexOf('_');
+        const classId = lastUnderscore !== -1 ? signup.class_key.substring(0, lastUnderscore) : signup.class_key;
+        const dateStr = lastUnderscore !== -1 ? signup.class_key.substring(lastUnderscore + 1) : '';
+
         if (dateStr) {
           const classDetails = findClassDetails(classId, dateStr);
           if (classDetails) {
@@ -3464,9 +3509,9 @@ export default function DashboardPage() {
       bDo = endDate.toISOString().split('T')[0];
     }
     if (new Date(bDo) < new Date(bOd)) { showToast("Data końcowa blokady musi być późniejsza lub równa początkowej!", 'error'); return; }
-    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? Użytkownik zostanie automatycznie wypisany z nadchodzących zajęć.`)) return;
+    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} do ${bDo}? Użytkownik zostanie automatycznie wypisany z nadchodzących zajęć.`)) return;
     
-    const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
+    const powod = `Zablokowano w okresie ${bOd} do ${bDo}`;
     const now = new Date();
     let cancelledCount = 0;
     const { data: userSignups } = await supabase
@@ -3476,9 +3521,10 @@ export default function DashboardPage() {
 
     if (userSignups && userSignups.length > 0) {
       for (const signup of userSignups) {
-        const parts = (signup.class_key || '').split('_');
-        const classId = parts[0];
-        const dateStr = parts[1];
+        const lastUnderscore = (signup.class_key || '').lastIndexOf('_');
+        const classId = lastUnderscore !== -1 ? signup.class_key.substring(0, lastUnderscore) : signup.class_key;
+        const dateStr = lastUnderscore !== -1 ? signup.class_key.substring(lastUnderscore + 1) : '';
+
         if (dateStr) {
           const classDetails = findClassDetails(classId, dateStr);
           if (classDetails) {
@@ -3611,9 +3657,10 @@ export default function DashboardPage() {
     const countedIsoKeys = new Set<string>();
 
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
-      const parts = classKey.split('_');
-      const classId = parts[0];
-      const dateStr = parts[1];
+      const lastUnderscore = classKey.lastIndexOf('_');
+      const classId = lastUnderscore !== -1 ? classKey.substring(0, lastUnderscore) : classKey;
+      const dateStr = lastUnderscore !== -1 ? classKey.substring(lastUnderscore + 1) : '';
+
       if (dateStr) {
         const classDetails = findClassDetails(classId, dateStr);
         if (classDetails) {
@@ -3759,7 +3806,6 @@ export default function DashboardPage() {
     showToast(`Oznaczono nieobecność. Nałożono 3 dni blokady zapisów na ${klient.firstName} ${klient.lastName}.`);
     loadData();
   };
-
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -3854,8 +3900,8 @@ export default function DashboardPage() {
       }
 
       const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
-      const parts = classKeyStr.split('_');
-      const dateStr = parts[1];
+      const lastUnderscore = classKeyStr.lastIndexOf('_');
+      const dateStr = lastUnderscore !== -1 ? classKeyStr.substring(lastUnderscore + 1) : '';
       let d = 1, m = 1;
       if (dateStr.includes('/')) {
         [d, m] = dateStr.split('/').map(Number);
@@ -3936,10 +3982,14 @@ export default function DashboardPage() {
         return;
       }
 
-      const trainingName = selectedClass.title || '';
-      const cutoffMinutes = bookingRules.booking_cutoff_per_class?.[trainingName] !== undefined
-        ? bookingRules.booking_cutoff_per_class[trainingName]
-        : bookingRules.booking_cutoff_minutes;
+      const trainingName = (selectedClass.title || '').trim();
+      let cutoffMinutes = bookingRules.booking_cutoff_minutes;
+      if (bookingRules.booking_cutoff_per_class) {
+        const foundKey = Object.keys(bookingRules.booking_cutoff_per_class).find(k => areClassNamesMatching(k, trainingName));
+        if (foundKey && bookingRules.booking_cutoff_per_class[foundKey] !== null && bookingRules.booking_cutoff_per_class[foundKey] !== undefined) {
+          cutoffMinutes = bookingRules.booking_cutoff_per_class[foundKey];
+        }
+      }
 
       if (cutoffMinutes !== null && cutoffMinutes !== undefined && cutoffMinutes > 0) {
         const cutoffMs = cutoffMinutes * 60 * 1000;
@@ -4012,7 +4062,8 @@ export default function DashboardPage() {
       const countedDayClassKeys = new Set<string>();
       Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
         if (cKey.includes(`_${selectedClass.displayDate}`) || cKey.endsWith(`_${selectedClass.displayDate}`)) {
-          const classId = cKey.split('_')[0];
+          const lastUnderscore = cKey.lastIndexOf('_');
+          const classId = lastUnderscore !== -1 ? cKey.substring(0, lastUnderscore) : cKey;
           const normalizedKey = `${classId}_${selectedClass.displayDate}`;
           if (!countedDayClassKeys.has(normalizedKey)) {
             if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) {
@@ -4080,7 +4131,6 @@ export default function DashboardPage() {
         return; 
       }
 
-      // KOREKTA BUFORA: Jeśli klient rezerwuje wejście na przyszłe zajęcia, bufor 24h NIE MOŻE się włączyć!
       let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
@@ -4347,7 +4397,7 @@ export default function DashboardPage() {
 
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
-      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) {}
     }
     const [dStr, mStr] = selectedClass.displayDate.split('/');
     const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
@@ -4451,9 +4501,9 @@ export default function DashboardPage() {
 
     if (!confirm(confirmText)) return;
 
-    const parts = classKey.split('_');
-    const classId = parts[0];
-    const dateStr = parts[1];
+    const lastUnderscore = classKey.lastIndexOf('_');
+    const classId = lastUnderscore !== -1 ? classKey.substring(0, lastUnderscore) : classKey;
+    const dateStr = lastUnderscore !== -1 ? classKey.substring(lastUnderscore + 1) : '';
     const keysToDelete = getKeysVariants(classId, dateStr);
 
     const { error } = await supabase
@@ -4469,7 +4519,7 @@ export default function DashboardPage() {
 
     let updatedNadchodzace = currentUser.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
-      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) {}
     }
     const dayStr = String(fullDateObj.getDate()).padStart(2, '0');
     const monthStr = String(fullDateObj.getMonth() + 1).padStart(2, '0');
@@ -4567,8 +4617,8 @@ export default function DashboardPage() {
       }
 
       const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
-      const parts = classKeyStr.split('_');
-      const dateStr = parts[1];
+      const lastUnderscore = classKeyStr.lastIndexOf('_');
+      const dateStr = lastUnderscore !== -1 ? classKeyStr.substring(lastUnderscore + 1) : '';
       let d = 1, m = 1;
       if (dateStr.includes('/')) {
         [d, m] = dateStr.split('/').map(Number);
@@ -4653,7 +4703,8 @@ export default function DashboardPage() {
       const countedDayKeys = new Set<string>();
       Object.entries(zapisyNaZajecia).forEach(([cKey, uczestnicy]) => {
         if (cKey.includes(`_${selectedClass.displayDate}`) || cKey.endsWith(`_${selectedClass.displayDate}`)) {
-          const classId = cKey.split('_')[0];
+          const lastUnderscore = cKey.lastIndexOf('_');
+          const classId = lastUnderscore !== -1 ? cKey.substring(0, lastUnderscore) : cKey;
           const normalizedKey = `${classId}_${selectedClass.displayDate}`;
           if (!countedDayKeys.has(normalizedKey)) {
             if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klient.id))) {
@@ -4682,7 +4733,6 @@ export default function DashboardPage() {
         return; 
       }
 
-      // KOREKTA BUFORA: Jeśli administrator/trener zapisuje klienta na zajęcia w przód, bufor 24h nie włącza się!
       let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
       if (passIndex !== -1) {
@@ -5024,9 +5074,9 @@ export default function DashboardPage() {
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
       const mojZapis = Array.isArray(uczestnicy) ? uczestnicy.find((u: any) => String(u.id) === String(currentUser.id)) : null;
       if (mojZapis) {
-        const parts = classKey.split('_');
-        const classId = parts[0];
-        const dateStr = parts[1];
+        const lastUnderscore = classKey.lastIndexOf('_');
+        const classId = lastUnderscore !== -1 ? classKey.substring(0, lastUnderscore) : classKey;
+        const dateStr = lastUnderscore !== -1 ? classKey.substring(lastUnderscore + 1) : '';
         if (dateStr) {
           const classInfo = findClassDetails(classId, dateStr);
 
@@ -5591,7 +5641,9 @@ export default function DashboardPage() {
 
                     let classDetailsResolved: any = null;
                     if (op.class_key && op.class_key.includes('_')) {
-                      const [cId, dPart] = op.class_key.split('_');
+                      const lastUnderscore = op.class_key.lastIndexOf('_');
+                      const cId = op.class_key.substring(0, lastUnderscore);
+                      const dPart = op.class_key.substring(lastUnderscore + 1);
                       classDetailsResolved = findClassDetails(cId, dPart);
                     }
 
@@ -5788,7 +5840,9 @@ export default function DashboardPage() {
                         const isFull = liczbaGlowna >= limitZajec;
                         const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
                         const isPastEvent = isPastDay || isPastTime;
-                        const isLockedForClient = ['klubowicz', 'trener'].includes(appRole) && isPastEvent;
+                        
+                        // WYMÓG 2: Trener i admin mają zawsze dostęp do minionych zajęć, blokada dotyczy tylko klubowiczów
+                        const isLockedForClient = appRole === 'klubowicz' && isPastEvent;
 
                         const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
                         const isClassCancelled = item.isOdwołane || autoCancelStatus.isAutoCancelled;
@@ -6222,7 +6276,6 @@ export default function DashboardPage() {
           </section>
         </div>
       )}
-
       {/* MODAL: KUP KARNET */}
       {isBuyPassModalOpen && (() => {
         const effectiveDiscount = getEffectiveDiscount(currentUser);
@@ -6556,6 +6609,7 @@ export default function DashboardPage() {
                           </div>
                         </div>
 
+                        {/* Obsługa obecności przez Trenera / Admina */}
                         {canManageClass && (
                           <div className="flex items-center justify-end gap-2 border-t border-sky-100 pt-3 text-xs w-full">
                             {(!osobaZapisana.nieobecny) && (
@@ -6957,6 +7011,7 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
       {/* MODAL: EDYCJA CZASU WYPISU Z LISTY REZERWOWEJ */}
       {isEditWaitlistModalOpen && editWaitlistTarget && (
         <div className="fixed inset-0 bg-slate-950/70 z-[70] flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
@@ -7625,7 +7680,7 @@ export default function DashboardPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚠️ Wypisz uczestnika</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚠️️ Wypisz uczestnika</h3>
               <button onClick={() => setClientToUnregister(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             <div className="space-y-3 text-xs text-slate-700">
@@ -8162,4 +8217,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
