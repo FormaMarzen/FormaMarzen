@@ -8,6 +8,38 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+// Pomocnik do nielimitowanego pobierania rekordów z obsługą stronicowania Supabase
+const fetchAllFromSupabase = async (
+  table: string,
+  orderBy: string = 'id',
+  ascending: boolean = false,
+  maxPages: number = 50
+) => {
+  let result: any[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .order(orderBy, { ascending })
+      .range(i * 1000, (i + 1) * 1000 - 1);
+
+    if (error) {
+      if (orderBy !== 'id' && error.message?.includes('does not exist')) {
+        return fetchAllFromSupabase(table, 'id', ascending, maxPages);
+      }
+      console.error(`Błąd pobierania tabeli ${table}:`, error);
+      break;
+    }
+    if (data && data.length > 0) {
+      result.push(...data);
+      if (data.length < 1000) break;
+    } else {
+      break;
+    }
+  }
+  return result;
+};
+
 export default function MojeZapisyPage() {
   const [activeTab, setActiveTab] = useState<'zapisy' | 'ranking'>('zapisy');
   const [isOnlyRanking, setIsOnlyRanking] = useState(false);
@@ -61,19 +93,26 @@ export default function MojeZapisyPage() {
     max_daily_same_type_bookings: 1
   });
 
-  // Pomocnicza funkcja do bezpiecznego parsowania daty z class_key
-  const parseDateFromClassKey = useCallback((classKey: string) => {
+  // Bezpieczne parsowanie daty z uwzględnieniem roku utworzenia wpisu
+  const parseDateFromClassKey = useCallback((classKey: string, createdAt?: string) => {
     const parts = classKey ? String(classKey).split('_') : [];
     const datePart = parts[1] || '';
-    const currentYear = new Date().getFullYear();
+    
+    let fallbackYear = new Date().getFullYear();
+    if (createdAt) {
+      const cd = new Date(createdAt);
+      if (!isNaN(cd.getFullYear())) {
+        fallbackYear = cd.getFullYear();
+      }
+    }
 
-    if (!datePart) return new Date();
+    if (!datePart) return createdAt ? new Date(createdAt) : new Date();
 
     if (datePart.includes('/')) {
       const segments = datePart.split('/');
       if (segments.length === 2) {
         const [d, m] = segments;
-        return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
+        return new Date(fallbackYear, parseInt(m, 10) - 1, parseInt(d, 10));
       } else if (segments.length === 3) {
         const [d, m, y] = segments;
         const fullYear = y.length === 2 ? 2000 + parseInt(y, 10) : parseInt(y, 10);
@@ -87,14 +126,15 @@ export default function MojeZapisyPage() {
           return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
         } else {
           const [d, m, y] = segments;
-          return new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+          const fullYear = y.length === 2 ? 2000 + parseInt(y, 10) : parseInt(y, 10);
+          return new Date(fullYear, parseInt(m, 10) - 1, parseInt(d, 10));
         }
       } else if (segments.length === 2) {
         const [d, m] = segments;
-        return new Date(currentYear, parseInt(m, 10) - 1, parseInt(d, 10));
+        return new Date(fallbackYear, parseInt(m, 10) - 1, parseInt(d, 10));
       }
     }
-    return new Date();
+    return createdAt ? new Date(createdAt) : new Date();
   }, []);
 
   const loadData = useCallback(async () => {
@@ -103,19 +143,19 @@ export default function MojeZapisyPage() {
       const [
         sessionRes,
         rulesRes,
-        szablonyRes,
-        jednorazoweRes,
-        nadpisaniaRes,
-        allZapisyRes,
-        allKlienciRes
+        szablonyData,
+        jednorazoweData,
+        nadpisaniaData,
+        allRecords,
+        allClients
       ] = await Promise.all([
         supabase.auth.getSession(),
         supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-        supabase.from('grafik_zajec').select('*'),
-        supabase.from('zajecia_jednorazowe').select('*'),
-        supabase.from('nadpisania_zajec').select('*'),
-        supabase.from('zapisy_zajec').select('*').order('id', { ascending: false }).limit(10000),
-        supabase.from('klienci').select('*')
+        fetchAllFromSupabase('grafik_zajec', 'id', true, 20),
+        fetchAllFromSupabase('zajecia_jednorazowe', 'id', true, 20),
+        fetchAllFromSupabase('nadpisania_zajec', 'id', false, 50),
+        fetchAllFromSupabase('zapisy_zajec', 'id', false, 50),
+        fetchAllFromSupabase('klienci', 'id', true, 50)
       ]);
 
       if (rulesRes.data) {
@@ -134,12 +174,6 @@ export default function MojeZapisyPage() {
         });
       }
 
-      const allClients = allKlienciRes.data || [];
-      const allRecords = allZapisyRes.data || [];
-      const szablonyData = szablonyRes.data || [];
-      const jednorazoweData = jednorazoweRes.data || [];
-      const nadpisaniaData = nadpisaniaRes.data || [];
-
       const szablonyMap = new Map<string, any>();
       szablonyData.forEach((s: any) => szablonyMap.set(String(s.id), s));
 
@@ -152,7 +186,7 @@ export default function MojeZapisyPage() {
       const clientMap = new Map<string, any>();
       allClients.forEach((c: any) => clientMap.set(String(c.id), c));
 
-      const userEmail = sessionRes.data.session?.user?.email;
+      const userEmail = sessionRes.data?.session?.user?.email;
       if (userEmail) {
         const cleanEmail = userEmail.toLowerCase().trim();
         const rawClient = allClients.find((c: any) => (c['E-mail'] || c.email || '').toLowerCase().trim() === cleanEmail);
@@ -173,20 +207,7 @@ export default function MojeZapisyPage() {
           };
           setCurrentUser(parsedClient);
 
-          let userZapisyRaw: any[] = [];
-          try {
-            const { data: directData } = await supabase
-              .from('zapisy_zajec')
-              .select('*')
-              .eq('klient_id', rawClient.id)
-              .order('id', { ascending: false });
-            
-            userZapisyRaw = directData && directData.length > 0 
-              ? directData 
-              : allRecords.filter((z: any) => String(z.klient_id) === String(rawClient.id));
-          } catch (e) {
-            userZapisyRaw = allRecords.filter((z: any) => String(z.klient_id) === String(rawClient.id));
-          }
+          const userZapisyRaw = allRecords.filter((z: any) => String(z.klient_id) === String(rawClient.id));
 
           const uniqueUserZapisy: any[] = [];
           const seenUserClassKeys = new Set<string>();
@@ -233,7 +254,7 @@ export default function MojeZapisyPage() {
               }
             }
 
-            const dataObj = parseDateFromClassKey(z.class_key);
+            const dataObj = parseDateFromClassKey(z.class_key, z.created_at);
             const [sh = '00', sm = '00'] = (znalezionaGodzina || '00:00').split(':');
             const fullStartDateTime = new Date(dataObj.getFullYear(), dataObj.getMonth(), dataObj.getDate(), parseInt(sh, 10), parseInt(sm, 10), 0);
 
@@ -260,13 +281,13 @@ export default function MojeZapisyPage() {
               obecnosc: obecnoscText
             };
 
-            if (fullStartDateTime >= now) {
-              nadchodzace.push(itemObj);
-            } else {
+            if (isPresent || isAbsent || fullStartDateTime < now) {
               przeszle.push(itemObj);
               if (isAbsent) {
                 nieobecne.push(itemObj);
               }
+            } else {
+              nadchodzace.push(itemObj);
             }
           });
 
@@ -280,7 +301,7 @@ export default function MojeZapisyPage() {
         }
       }
 
-      // Budowanie globalnego rankingu obecności O(1)
+      // Budowanie rankingu obecności
       const rankingMap: Record<string, any> = {};
       const seenAttendanceKeys = new Set<string>();
 
@@ -306,13 +327,13 @@ export default function MojeZapisyPage() {
           };
         }
 
-        const dateObj = parseDateFromClassKey(r.class_key);
+        const dateObj = parseDateFromClassKey(r.class_key, r.created_at);
         rankingMap[kIdStr].records.push({ date: dateObj });
       });
 
       setAllUsersAttendance(Object.values(rankingMap));
 
-      // Budowanie globalnego rankingu nieobecności O(1)
+      // Budowanie rankingu nieobecności
       const absenceMap: Record<string, any> = {};
       const seenAbsenceKeys = new Set<string>();
 
@@ -338,7 +359,7 @@ export default function MojeZapisyPage() {
           };
         }
 
-        const dateObj = parseDateFromClassKey(r.class_key);
+        const dateObj = parseDateFromClassKey(r.class_key, r.created_at);
         absenceMap[kIdStr].records.push({ date: dateObj });
       });
 
@@ -594,6 +615,12 @@ export default function MojeZapisyPage() {
     return rankingAbsenceData.map(([name, count], idx) => ({ name, count, position: idx + 1 })).filter(item => item.name.toLowerCase().includes(q));
   }, [rankingAbsenceData, rankingSearchAbsence]);
 
+  // Pomocnik do bezpiecznego podświetlania profilu bez błędów składniowych w JSX
+  const currentUserNameClean = useMemo(() => {
+    if (!currentUser) return '';
+    return `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase();
+  }, [currentUser]);
+
   if (isLoading) {
     return <div className="p-16 text-center text-slate-400 font-bold uppercase tracking-widest text-xs">Ładowanie panelu klubowicza...</div>;
   }
@@ -639,7 +666,7 @@ export default function MojeZapisyPage() {
               <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">AKTYWNE ZAPISY NA ZAJĘCIA</h2>
               {zapisyNadchodzace.length > 4 && (
                 <button 
-                  onClick={() => setShowAllActive(!showAllActive)}
+                  onClick={() => setShowAllActive(!showAllActive)} 
                   className="text-xs font-bold text-sky-600 hover:text-sky-800 cursor-pointer uppercase tracking-wider"
                 >
                   {showAllActive ? 'Zwiń listę ↑' : `Pokaż wszystkie (${zapisyNadchodzace.length}) ↓`}
@@ -683,7 +710,7 @@ export default function MojeZapisyPage() {
                           <td className="py-4 px-5 font-semibold text-slate-600">{item.karnet}</td>
                           <td className="py-4 px-5 text-right">
                             <button 
-                              onClick={() => setItemToUnregister(item)}
+                              onClick={() => setItemToUnregister(item)} 
                               className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3.5 py-2 rounded-xl transition-colors cursor-pointer border border-rose-200 shadow-sm uppercase tracking-wider text-[10px]"
                             >
                               Wypisz się
@@ -703,7 +730,7 @@ export default function MojeZapisyPage() {
               <h2 className="text-[13px] font-black text-slate-400 uppercase tracking-widest">HISTORIA ZAPISÓW</h2>
               {zapisyPrzeszle.length > 3 && (
                 <button 
-                  onClick={() => setShowAllHistory(!showAllHistory)}
+                  onClick={() => setShowAllHistory(!showAllHistory)} 
                   className="text-xs font-bold text-sky-600 hover:text-sky-800 cursor-pointer uppercase tracking-wider"
                 >
                   {showAllHistory ? 'Zwiń listę ↑' : `Pokaż wszystkie (${zapisyPrzeszle.length}) ↓`}
@@ -936,15 +963,18 @@ export default function MojeZapisyPage() {
                         <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników.</td>
                       </tr>
                     ) : (
-                      (showAllRankingMonth ? filteredRankingMonth : filteredRankingMonth.slice(0, 10)).map((item: any, idx: number) => (
-                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
-                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
-                            {item.position === 1 ? '🥇' : item.position === 2 ? '🥈' : item.position === 3 ? '🥉' : `${item.position}.`}
-                          </td>
-                          <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
-                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
-                        </tr>
-                      ))
+                      (showAllRankingMonth ? filteredRankingMonth : filteredRankingMonth.slice(0, 10)).map((item: any, idx: number) => {
+                        const isMe = currentUserNameClean && item.name.toLowerCase() === currentUserNameClean;
+                        return (
+                          <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${isMe ? 'bg-sky-50/80 font-bold' : ''}`}>
+                            <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                              {item.position === 1 ? '🥇' : item.position === 2 ? '🥈' : item.position === 3 ? '🥉' : `${item.position}.`}
+                            </td>
+                            <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
+                            <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1010,15 +1040,18 @@ export default function MojeZapisyPage() {
                         <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników.</td>
                       </tr>
                     ) : (
-                      (showAllRankingQuarter ? filteredRankingQuarter : filteredRankingQuarter.slice(0, 10)).map((item: any, idx: number) => (
-                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
-                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
-                            {item.position === 1 ? '🥇' : item.position === 2 ? '🥈' : item.position === 3 ? '🥉' : `${item.position}.`}
-                          </td>
-                          <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
-                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
-                        </tr>
-                      ))
+                      (showAllRankingQuarter ? filteredRankingQuarter : filteredRankingQuarter.slice(0, 10)).map((item: any, idx: number) => {
+                        const isMe = currentUserNameClean && item.name.toLowerCase() === currentUserNameClean;
+                        return (
+                          <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${isMe ? 'bg-sky-50/80 font-bold' : ''}`}>
+                            <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                              {item.position === 1 ? '🥇' : item.position === 2 ? '🥈' : item.position === 3 ? '🥉' : `${item.position}.`}
+                            </td>
+                            <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
+                            <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1083,15 +1116,18 @@ export default function MojeZapisyPage() {
                         <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników.</td>
                       </tr>
                     ) : (
-                      (showAllRankingYear ? filteredRankingYear : filteredRankingYear.slice(0, 10)).map((item: any, idx: number) => (
-                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
-                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
-                            {item.position === 1 ? '🥇' : item.position === 2 ? '🥈' : item.position === 3 ? '🥉' : `${item.position}.`}
-                          </td>
-                          <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
-                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
-                        </tr>
-                      ))
+                      (showAllRankingYear ? filteredRankingYear : filteredRankingYear.slice(0, 10)).map((item: any, idx: number) => {
+                        const isMe = currentUserNameClean && item.name.toLowerCase() === currentUserNameClean;
+                        return (
+                          <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${isMe ? 'bg-sky-50/80 font-bold' : ''}`}>
+                            <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                              {item.position === 1 ? '🥇' : item.position === 2 ? '🥈' : item.position === 3 ? '🥉' : `${item.position}.`}
+                            </td>
+                            <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
+                            <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1150,15 +1186,18 @@ export default function MojeZapisyPage() {
                         <td colSpan={3} className="py-8 text-center text-slate-400">Brak wyników.</td>
                       </tr>
                     ) : (
-                      (showAllRankingAllTime ? filteredRankingAllTime : filteredRankingAllTime.slice(0, 10)).map((item: any, idx: number) => (
-                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-sky-50/80 font-bold' : ''}`}>
-                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
-                            {item.position === 1 ? '🥇' : item.position === 2 ? '🥈' : item.position === 3 ? '🥉' : `${item.position}.`}
-                          </td>
-                          <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
-                          <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
-                        </tr>
-                      ))
+                      (showAllRankingAllTime ? filteredRankingAllTime : filteredRankingAllTime.slice(0, 10)).map((item: any, idx: number) => {
+                        const isMe = currentUserNameClean && item.name.toLowerCase() === currentUserNameClean;
+                        return (
+                          <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${isMe ? 'bg-sky-50/80 font-bold' : ''}`}>
+                            <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                              {item.position === 1 ? '🥇' : item.position === 2 ? '🥈' : item.position === 3 ? '🥉' : `${item.position}.`}
+                            </td>
+                            <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
+                            <td className="py-3.5 px-3 text-right font-black text-sky-600 text-sm">{item.count}</td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1217,15 +1256,18 @@ export default function MojeZapisyPage() {
                         <td colSpan={3} className="py-8 text-center text-slate-400">Brak nieobecności.</td>
                       </tr>
                     ) : (
-                      (showAllRankingAbsence ? filteredRankingAbsence : filteredRankingAbsence.slice(0, 10)).map((item: any, idx: number) => (
-                        <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${currentUser && item.name.toLowerCase() === `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase() ? 'bg-rose-50/80 font-bold' : ''}`}>
-                          <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
-                            {item.position === 1 ? '1.' : item.position === 2 ? '2.' : item.position === 3 ? '3.' : `${item.position}.`}
-                          </td>
-                          <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
-                          <td className="py-3.5 px-3 text-right font-black text-rose-600 text-sm">{item.count}</td>
-                        </tr>
-                      ))
+                      (showAllRankingAbsence ? filteredRankingAbsence : filteredRankingAbsence.slice(0, 10)).map((item: any, idx: number) => {
+                        const isMe = currentUserNameClean && item.name.toLowerCase() === currentUserNameClean;
+                        return (
+                          <tr key={idx} className={`hover:bg-slate-50/50 transition-colors ${isMe ? 'bg-rose-50/80 font-bold' : ''}`}>
+                            <td className="py-3.5 px-3 font-mono font-bold text-slate-500">
+                              {item.position === 1 ? '1.' : item.position === 2 ? '2.' : item.position === 3 ? '3.' : `${item.position}.`}
+                            </td>
+                            <td className="py-3.5 px-3 font-bold text-slate-900 truncate max-w-[120px]" title={item.name}>{item.name}</td>
+                            <td className="py-3.5 px-3 text-right font-black text-rose-600 text-sm">{item.count}</td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
