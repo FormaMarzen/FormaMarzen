@@ -180,6 +180,68 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
+// POMOCNIK WYLICZANIA DNI ZAWIESZENIA W BIEŻĄCYM KWARTALE (Q1: sty-mar, Q2: kwi-cze, Q3: lip-wrz, Q4: paź-gru)
+const getSuspensionDaysInCurrentQuarter = (
+  suspensions: any[], 
+  activeSuspension?: { od?: string | null; do?: string | null }
+): { days: number; quarterCode: string; quarterLabel: string } => {
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth(); // 0-11
+  const qIndex = Math.floor(currentMonth / 3); // 0=Q1, 1=Q2, 2=Q3, 3=Q4
+  const qCodes = ['Q1', 'Q2', 'Q3', 'Q4'];
+  const qLabels = ['I kwartał', 'II kwartał', 'III kwartał', 'IV kwartał'];
+  const currentQCode = qCodes[qIndex];
+  const currentQLabel = qLabels[qIndex];
+
+  const qStart = new Date(currentYear, qIndex * 3, 1, 0, 0, 0, 0);
+  const qEnd = new Date(currentYear, (qIndex + 1) * 3, 0, 23, 59, 59, 999);
+
+  let totalDaysInQuarter = 0;
+  const seenPeriods = new Set<string>();
+
+  const addPeriod = (odStr?: string | null, doStr?: string | null, fallbackDays?: number | string) => {
+    if (!odStr) return;
+    const key = `${odStr}_${doStr || ''}`;
+    if (seenPeriods.has(key)) return;
+    seenPeriods.add(key);
+
+    const sDate = new Date(odStr);
+    sDate.setHours(0, 0, 0, 0);
+
+    let eDate = doStr ? new Date(doStr) : new Date(sDate);
+    if (!doStr && fallbackDays) {
+      const dVal = parseInt(String(fallbackDays), 10);
+      if (!isNaN(dVal) && dVal > 0) {
+        eDate = new Date(sDate);
+        eDate.setDate(eDate.getDate() + dVal - 1);
+      }
+    }
+    eDate.setHours(23, 59, 59, 999);
+
+    if (isNaN(sDate.getTime()) || isNaN(eDate.getTime())) return;
+    if (eDate < qStart || sDate > qEnd) return;
+
+    const effectiveStart = sDate < qStart ? qStart : sDate;
+    const effectiveEnd = eDate > qEnd ? qEnd : eDate;
+
+    const days = Math.floor((effectiveEnd.getTime() - effectiveStart.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    if (days > 0) {
+      totalDaysInQuarter += days;
+    }
+  };
+
+  (suspensions || []).forEach(s => {
+    addPeriod(s.od || s.start_date || s.od_dnia, s.do || s.end_date || s.do_dnia || s.planowane_do, s.dni || s.planowane_dni);
+  });
+
+  if (activeSuspension?.od) {
+    addPeriod(activeSuspension.od, activeSuspension.do);
+  }
+
+  return { days: totalDaysInQuarter, quarterCode: currentQCode, quarterLabel: currentQLabel };
+};
+
 const parseClassDate = (dateStr: string): number => {
   if (!dateStr) return 0;
   let d = String(dateStr).trim();
@@ -2672,6 +2734,13 @@ export default function KlienciPage() {
   });
 
   const klienciTrenerzyList = clients.filter(c => c.isTrainer);
+
+  // OZNACZENIE BIEŻĄCEGO KWARTAŁU DLA NAGŁÓWKA TABELI
+  const currentQuarterCode = (() => {
+    const m = new Date().getMonth();
+    return ['Q1', 'Q2', 'Q3', 'Q4'][Math.floor(m / 3)];
+  })();
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 overflow-x-hidden font-sans antialiased text-slate-800">
       
@@ -2754,7 +2823,7 @@ export default function KlienciPage() {
                 <th onClick={() => handleSort('lastName')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Nazwisko {sortField === 'lastName' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('pass')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Karnet {sortField === 'pass' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th className="py-3 px-3 font-bold whitespace-nowrap">Rabat (Stały / Ciągłość)</th>
-                <th className="py-3 px-3 font-bold whitespace-nowrap">Zawieszenie</th>
+                <th className="py-3 px-3 font-bold whitespace-nowrap">Zawieszenie ({currentQuarterCode})</th>
                 <th onClick={() => handleSort('price')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Cena {sortField === 'price' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('expiresDate')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Wygasa {sortField === 'expiresDate' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
                 <th onClick={() => handleSort('wallet')} className="py-3 px-3 font-bold cursor-pointer hover:bg-sky-100/60 transition-colors whitespace-nowrap">Portfel {sortField === 'wallet' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}</th>
@@ -2799,10 +2868,11 @@ export default function KlienciPage() {
                   }
                 });
 
-                const lacznieWykorzystaneDni = mergedUniqueZaw.reduce((sum: number, item: any) => {
-                  const d = parseInt(item.dni || item.planowane_dni || '0', 10);
-                  return sum + (isNaN(d) ? 0 : d);
-                }, 0);
+                // DNI ZAWIESZENIA WYKORZYSTANE W TYM KWARTALE
+                const activeSusp = aktywnyKarnetZawieszony ? { od: aktywnyKarnetZawieszony.zawieszonyOd, do: aktywnyKarnetZawieszony.zawieszonyDo } : undefined;
+                const kwartalZawieszenia = getSuspensionDaysInCurrentQuarter(mergedUniqueZaw, activeSusp);
+                const kwartalWykorzystaneDni = kwartalZawieszenia.days;
+                const kwartalKod = kwartalZawieszenia.quarterCode;
 
                 let walletBadgeClass = 'bg-slate-100 text-slate-700 border-slate-200';
                 if (walletNum > 0) {
@@ -2891,7 +2961,7 @@ export default function KlienciPage() {
                       </div>
                     </td>
 
-                    {/* KOLUMNA: ZAWIESZENIE */}
+                    {/* KOLUMNA: ZAWIESZENIE (BIEŻĄCY KWARTAŁ) */}
                     <td className="py-3.5 px-3 whitespace-nowrap font-mono text-xs">
                       {isContract && dniZawLeft !== null ? (
                         <div className="flex flex-col gap-0.5">
@@ -2900,9 +2970,9 @@ export default function KlienciPage() {
                           }`}>
                             Pula: {dniZawLeft} / 30 dni
                           </span>
-                          {lacznieWykorzystaneDni > 0 && (
+                          {kwartalWykorzystaneDni > 0 && (
                             <span className="text-[10px] text-slate-500 font-sans">
-                              Wykorzystano: {lacznieWykorzystaneDni} dni
+                              Wykorzystano ({kwartalKod}): {kwartalWykorzystaneDni} dni
                             </span>
                           )}
                         </div>
@@ -2912,12 +2982,12 @@ export default function KlienciPage() {
                             ⏳ Plan: do {aktywnyKarnetZawieszony.zawieszonyDo}
                           </span>
                           <span className="text-[10px] text-slate-500 font-sans">
-                            Wykorzystano: {lacznieWykorzystaneDni} dni
+                            Wykorzystano ({kwartalKod}): {kwartalWykorzystaneDni} dni
                           </span>
                         </div>
-                      ) : lacznieWykorzystaneDni > 0 ? (
+                      ) : kwartalWykorzystaneDni > 0 ? (
                         <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px] font-medium border border-slate-200">
-                          Wykorzystano: {lacznieWykorzystaneDni} dni
+                          Wykorzystano ({kwartalKod}): {kwartalWykorzystaneDni} dni
                         </span>
                       ) : (
                         <span className="text-slate-400 text-[11px] font-sans">-</span>
@@ -3446,7 +3516,6 @@ export default function KlienciPage() {
                       
                       let isExpiring = false;
                       let isPending = karnet.statusTekst?.includes('Oczekujący');
-                      // ROZWIĄZANIE PROBLEMU: Zawieszenie jest aktywne tylko dopóki data końcowa nie minęła
                       const czyZawieszony = Boolean(karnet.zawieszonyOd && (!karnet.zawieszonyDo || karnet.zawieszonyDo >= todayStr));
                       const defKarnetu = dostepneKarnety.find(dk => dk.nazwa === karnet.nazwa);
                       const isContract = isContractPassCheck(karnet, defKarnetu);
@@ -4265,7 +4334,7 @@ export default function KlienciPage() {
                                   </span>
                                 </td>
                                 <td className="py-3 px-4 whitespace-nowrap">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${item.statusKlasa}`}>
+                                  <span className={`px-2.5 py-0.5 rounded text-[10px] font-black border ${item.statusKlasa}`}>
                                     {item.status} ({item.dataOdwieszenia})
                                   </span>
                                 </td>
