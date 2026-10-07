@@ -143,10 +143,11 @@ const getCalendarExpiryDate = (startDateStr: string, limitCzasowyStr?: string): 
   }
 };
 
-// KULOODPORNY PARSER DAT Z CLASS_KEY
+// KULOODPORNY PARSER DAT Z CLASS_KEY (OBSŁUGA PREFIKSÓW NP. j_15_05/10)
 const parseDateFromClassKey = (classKey: string): Date => {
-  const parts = classKey ? String(classKey).split('_') : [];
-  const datePart = parts[1] || '';
+  if (!classKey) return new Date();
+  const lastUnderscore = classKey.lastIndexOf('_');
+  const datePart = lastUnderscore !== -1 ? classKey.substring(lastUnderscore + 1) : '';
   const currentYear = new Date().getFullYear();
 
   if (!datePart) return new Date();
@@ -308,9 +309,9 @@ const findClassDetailsInGrafik = (
   nadpisaniaMap: Record<string, any>
 ) => {
   if (!classKey) return null;
-  const parts = String(classKey).split('_');
-  const classId = parts[0];
-  const datePart = parts[1] || '';
+  const lastUnderscore = String(classKey).lastIndexOf('_');
+  const classId = lastUnderscore !== -1 ? String(classKey).substring(0, lastUnderscore) : String(classKey);
+  const datePart = lastUnderscore !== -1 ? String(classKey).substring(lastUnderscore + 1) : '';
 
   const dateObj = parseDateFromClassKey(classKey);
   const dayKeys = ['nd', 'pon', 'wt', 'sr', 'czw', 'pt', 'sob'];
@@ -380,10 +381,13 @@ const resolveAuthorAndMovementDetails = (
     (t: any) => String(t.klient_id) === String(clientId)
   );
 
+  const lastUnderscore = classKey ? classKey.lastIndexOf('_') : -1;
+  const dateSegment = lastUnderscore !== -1 ? classKey.substring(lastUnderscore + 1) : '---';
+
   const matchedTrans = clientTrans.find(
     (t: any) => t.class_key && String(t.class_key) === String(classKey)
   ) || clientTrans.find(
-    (t: any) => classKey && t.opis && t.opis.includes(classKey.split('_')[1] || '---')
+    (t: any) => classKey && t.opis && t.opis.includes(dateSegment)
   );
 
   if (matchedTrans) {
@@ -446,7 +450,7 @@ const resolveAuthorAndMovementDetails = (
     }
     if (opis.includes('jako administrator') || opis.includes('przez klub')) {
       return {
-        authorLabel: '🛡️️ Trener / Klub (Panel)',
+        authorLabel: '🛡️ Trener / Klub (Panel)',
         isClient: false,
         rawActionType: 'ZAPIS (KLUB)',
         detailsDesc: opis,
@@ -663,8 +667,8 @@ export default function KlienciPage() {
 
     if (!participants) return;
 
-    const parts = classKey.split('_');
-    const classId = parts[0];
+    const lastUnderscore = classKey.lastIndexOf('_');
+    const classId = lastUnderscore !== -1 ? classKey.substring(0, lastUnderscore) : classKey;
     let limit = 12;
 
     const [{ data: szablon }, { data: jednorazowe }, { data: nadpisanie }] = await Promise.all([
@@ -1078,12 +1082,27 @@ export default function KlienciPage() {
         let karnetyZmienione = false;
         let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true' || c.has_lost_continuity === true || c.has_lost_continuity === 'true';
 
-        // 1. WERYFIKACJA STANU KARNETU I POPRAWNA OBSŁUGA BUFORA
+        // 1. WERYFIKACJA STANU KARNETU, POPRAWNA OBSŁUGA BUFORA ORAZ AUTOMATYCZNE ZAMYKANIE MINIONYCH ZAWIESZEŃ
         parsedKarnety = parsedKarnety.map((k: any) => {
           const pasujacyDef = ustrukturyzowaneKarnety.find(dk => dk.nazwa === k.nazwa);
           const isContract = isContractPassCheck(k, pasujacyDef);
           const isTimeBased = pasujacyDef?.typ_karnetu === 'Na czas';
           const isQuantityPass = !isContract && !isTimeBased && (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+
+          // AUTOMATYCZNE ZAMKNIĘCIE ZAKOŃCZONEGO ZAWIESZENIA (PO TERMINIE DO)
+          if (k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo < todayDateOnly) {
+            const passHist = safeJsonParse(k.historiaZawieszen, []);
+            const updatedHist = passHist.map((h: any) => 
+              h.status === 'aktywne' ? { ...h, status: 'zakonczone', dataOdwieszenia: k.zawieszonyDo } : h
+            );
+            k.zawieszonyOd = null;
+            k.zawieszonyDo = null;
+            k.historiaZawieszen = updatedHist;
+            k.statusTekst = isContract 
+              ? `Umowa 12M (${k.rata || '0 / 12'}) - Ważny do: ${k.waznyDo}` 
+              : `Ważny do: ${k.waznyDo}`;
+            karnetyZmienione = true;
+          }
 
           if (isContract) {
             if (!k.isContract12M) {
@@ -1312,7 +1331,6 @@ export default function KlienciPage() {
                currentOffset = -staryStd;
                hasChanges = true;
 
-               // Wstawiamy wpis do tabeli transakcje TYLKO JEDEN RAZ!
                if (!alreadyLoggedUtrata) {
                  await supabase.from('transakcje').insert([{
                    klient_id: c.id,
@@ -1329,7 +1347,6 @@ export default function KlienciPage() {
                }
            }
         } else if (finalKarnety.length === 0 && !hasLostContinuity) {
-           // Jeśli klient nie ma karnetów i nie ma flagi utraty, ustawiamy wyłącznie flagę w profilu bez tworzenia transakcji
            hasLostContinuity = true;
            currentDiscount = '';
            currentRabat = 0;
@@ -1406,7 +1423,6 @@ export default function KlienciPage() {
           historiaZawieszen: mergedHistoriaZawieszen
         };
       });
-      
       const enriched = await Promise.all(enrichedPromises);
       setClients(enriched);
 
@@ -1513,6 +1529,7 @@ export default function KlienciPage() {
     setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
     setIsEditingSystemDiscount(false);
   };
+
   const handleAddClientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmittingRef.current) return;
@@ -1845,7 +1862,7 @@ export default function KlienciPage() {
         : `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Zapłacono z góry / Gotówka)`;
 
       if (paymentMethod === 'later' && kwotaKarnetu > 0) {
-        const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]+/g, "")) || 0;
+        const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]/g, "")) || 0;
         const nowyStanPortfela = currentWalletNum - kwotaKarnetu;
         nowyStanStr = `${nowyStanPortfela.toFixed(2)} PLN`;
         logKwota = -kwotaKarnetu;
@@ -2190,7 +2207,7 @@ export default function KlienciPage() {
           klient_id: profileClient.id,
           typ_operacji: 'zawieszenie_karnetu',
           kwota: null,
-          opis: `Zawieszono karnet ${suspendPassTarget.nazwa} w okresie ${sOd} - ${sDo} (${calculatedDays} dni). Ważność wydłużono do ${newExtendedExpiry}.`
+          opis: `Zawieszono karnet ${suspendPassTarget.nazwa} w okresie ${sOd} do ${sDo} (${calculatedDays} dni). Ważność wydłużono do ${newExtendedExpiry}.`
         }]);
         
         await handleAutoWypiszPoZawieszeniu(profileClient.id, sOd, sDo, suspendPassTarget.nazwa);
@@ -2275,11 +2292,11 @@ export default function KlienciPage() {
       return;
     }
 
-    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} - ${bDo}? Użytkownik zostanie automatycznie wypisany z nadchodzących zajęć.`)) return;
+    if (!confirm(`Czy na pewno chcesz zablokować ten karnet w okresie ${bOd} do ${bDo}? Użytkownik zostanie automatycznie wypisany z nadchodzących zajęć.`)) return;
 
     isSubmittingRef.current = true;
     try {
-      const powod = `Zablokowano w okresie ${bOd} - ${bDo}`;
+      const powod = `Zablokowano w okresie ${bOd} do ${bDo}`;
 
       const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
       const uaktualnioneKarnety = stareKarnety.map((k: any) => {
@@ -2747,7 +2764,7 @@ export default function KlienciPage() {
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {sortedClients.map((client) => {
                 const walletNum = getWalletNumber(client.wallet);
-                const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo >= todayStr);
+                const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd && (!k.zawieszonyDo || k.zawieszonyDo >= todayStr));
                 const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr) || (client.blokadaDo && client.blokadaDo >= todayStr);
                 const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
                 const aktywnyKarnetObj = maKarnet ? client.karnetyKlubowicza[0] : null;
@@ -2793,7 +2810,6 @@ export default function KlienciPage() {
                 } else if (walletNum < 0) {
                   walletBadgeClass = 'bg-rose-100 text-rose-800 border-rose-300 font-bold';
                 }
-
                 return (
                   <tr key={client.id} className="hover:bg-sky-50/40 transition-colors">
                     <td className="py-3.5 px-3 text-center whitespace-nowrap"><input type="checkbox" className="rounded border-sky-300" /></td>
@@ -2843,7 +2859,7 @@ export default function KlienciPage() {
                         )}
                         {aktywnaBlokada && (
                           <span className="bg-rose-50 text-rose-800 text-[9px] font-black px-1.5 py-0.2 rounded border border-rose-200 inline-block w-fit whitespace-nowrap">
-                            ⚠️️ Zablokowane: {client.blokadaDo || (client.karnetyKlubowicza && client.karnetyKlubowicza[0]?.blokadaDo)}
+                            ⚠️ Zablokowane: {client.blokadaDo || (client.karnetyKlubowicza && client.karnetyKlubowicza[0]?.blokadaDo)}
                           </span>
                         )}
                       </div>
@@ -3358,7 +3374,7 @@ export default function KlienciPage() {
                        ) : (
                          <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => { setSystemDiscountInput(calculateSystemDiscount(profileClient).toString()); setIsEditingSystemDiscount(true); }}>
                            <span className="font-black text-sky-700 text-xs">{calculateSystemDiscount(profileClient)}%</span>
-                           <span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️️</span>
+                           <span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️</span>
                          </div>
                        )}
                     </div>
@@ -3374,7 +3390,7 @@ export default function KlienciPage() {
                     <div className="relative">
                       <button 
                         onClick={() => setIsGlobalPassMenuOpen(!isGlobalPassMenuOpen)} 
-                        className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer shadow-sm"
+                        className="w-9 h-9 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl border border-slate-200 flex items-center justify-center font-bold cursor-pointer shadow-sm" 
                         title="Zarządzaj karnetem"
                       >
                         ✏️
@@ -3430,7 +3446,8 @@ export default function KlienciPage() {
                       
                       let isExpiring = false;
                       let isPending = karnet.statusTekst?.includes('Oczekujący');
-                      const czyZawieszony = !!karnet.zawieszonyOd;
+                      // ROZWIĄZANIE PROBLEMU: Zawieszenie jest aktywne tylko dopóki data końcowa nie minęła
+                      const czyZawieszony = Boolean(karnet.zawieszonyOd && (!karnet.zawieszonyDo || karnet.zawieszonyDo >= todayStr));
                       const defKarnetu = dostepneKarnety.find(dk => dk.nazwa === karnet.nazwa);
                       const isContract = isContractPassCheck(karnet, defKarnetu);
 
@@ -3468,6 +3485,11 @@ export default function KlienciPage() {
                                     ⚠️ Zablokowane do {karnet.blokadaDo}
                                   </span>
                                 )}
+                                {czyZawieszony && (
+                                  <span className="bg-amber-100 text-amber-900 text-xs font-black px-2.5 py-0.5 rounded border border-amber-300">
+                                    ⏸️ Zawieszony: od {karnet.zawieszonyOd} do {karnet.zawieszonyDo || 'odwołania'}
+                                  </span>
+                                )}
                               </div>
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <span className={`${statusColorClass} text-[11px] font-bold px-2.5 py-0.5 rounded-full border whitespace-nowrap`}>
@@ -3486,7 +3508,7 @@ export default function KlienciPage() {
                                     <span>🎟️ Wejścia:</span> 
                                     <span className="text-amber-700">{karnet.pozostaloWejsc}</span> / <span>{karnet.poczatkoweWejsc || karnet.pozostaloWejsc}</span>
                                     {karnet.transferredEntries > 0 && (
-                                      <span className="text-emerald-700 text-[9px] font-extrabold">(+{karnet.transferredEntries} przeniesione)</span>
+                                      <span className="text-emerald-700 text-[9px] font-extrabold">(+{karnet.transferredEntries})</span>
                                     )}
                                   </span>
                                 )}
@@ -4054,7 +4076,6 @@ export default function KlienciPage() {
                             kto = '📱 Klubowicz (Aplikacja)';
                           }
                         }
-
                         if (['zajecia_zapis', 'zajecia_wypis', 'awans_z_krzesełka', 'zajecia_awans_rezerwa'].includes(typOp)) {
                           const mId = `trans_${t.id}`;
                           if (!seenMovementIds.has(mId)) {
@@ -4147,7 +4168,8 @@ export default function KlienciPage() {
                       const processedPeriodKeys = new Set<string>();
 
                       (profileClient.karnetyKlubowicza || []).forEach((karnet: any) => {
-                        if (karnet.zawieszonyOd) {
+                        const czyNadalZawieszony = Boolean(karnet.zawieszonyOd && (!karnet.zawieszonyDo || karnet.zawieszonyDo >= todayStr));
+                        if (czyNadalZawieszony) {
                           const periodKey = `${karnet.nazwa}_${karnet.zawieszonyOd}_${karnet.zawieszonyDo || ''}`;
                           processedPeriodKeys.add(periodKey);
 
@@ -4178,7 +4200,7 @@ export default function KlienciPage() {
                           if (!processedPeriodKeys.has(periodKey)) {
                             processedPeriodKeys.add(periodKey);
                             const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik');
-                            const isTrwajace = hz.status === 'aktywne';
+                            const isTrwajace = hz.status === 'aktywne' && (!hz.do || hz.do >= todayStr);
                             
                             finalSuspensionList.push({
                               id: `hist_pass_${hz.id || Math.random()}`,
@@ -4204,7 +4226,7 @@ export default function KlienciPage() {
                         if (odDnia && !processedPeriodKeys.has(periodKey)) {
                           processedPeriodKeys.add(periodKey);
                           const isKlubowicz = hz.kto?.toLowerCase().includes('klubowicz') || hz.kto?.toLowerCase().includes('użytkownik');
-                          const isTrwajace = hz.status === 'aktywne';
+                          const isTrwajace = hz.status === 'aktywne' && (!doDnia || doDnia >= todayStr);
 
                           finalSuspensionList.push({
                             id: `hist_client_${hz.id || Math.random()}`,
@@ -4266,6 +4288,7 @@ export default function KlienciPage() {
           </div>
         </div>
       )}
+
       {/* MODAL: PRZEDŁUŻ KARNET */}
       {isExtendPassModalOpen && profileClient && extendPassTarget && (
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
@@ -4865,7 +4888,7 @@ export default function KlienciPage() {
                   </p>
                 </div>
                 
-                {suspendPassTarget.zawieszonyOd ? (
+                {Boolean(suspendPassTarget.zawieszonyOd && (!suspendPassTarget.zawieszonyDo || suspendPassTarget.zawieszonyDo >= todayStr)) ? (
                   <div className="space-y-3 text-xs mt-4">
                     <div className="flex bg-white rounded-lg border border-amber-200 overflow-hidden font-bold">
                       <div className="flex-1 py-1.5 text-center bg-amber-200 text-amber-900">Karnet zawieszony</div>
