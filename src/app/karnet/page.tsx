@@ -160,7 +160,7 @@ const getCalendarExpiryDate = (startDateStr: string, limitCzasowyStr?: string): 
 // POMOCNICZA FUNKCJA DO PEWNEGO ODCZYTU RABATU CIĄGŁOŚCI OD ADMINA
 const extractClientContinuityDiscount = (client: any): number | null => {
   if (!client) return null;
-  if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') return 0;
+  if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true) return 0;
   
   if (client.rabat !== undefined && client.rabat !== null && client.rabat !== '') {
     const val = parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''));
@@ -676,7 +676,7 @@ export default function KarnetyPage() {
       return { hasContinuity: false, percent: 0, label: '0% (Karnet ≤ 150 zł - brak rabatu ciągłości)' };
     }
     
-    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true) {
       return { hasContinuity: false, percent: 0, label: '0% (Ciągłość przerwana)' };
     }
 
@@ -971,6 +971,7 @@ export default function KarnetyPage() {
       setIsProcessingPayment(false);
     }
   };
+
   const loadData = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -1060,7 +1061,7 @@ export default function KarnetyPage() {
             let karnetyChanged = false;
             let walletChanged = false;
             let currentWalletAmount = parseFloat(String(c.Portfel ?? c.portfel ?? c.wallet ?? 0).replace(/[^0-9.-]/g, '')) || 0;
-            let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true';
+            let continuityBroken = c.hasLostContinuity === true || c.hasLostContinuity === 'true' || c.has_lost_continuity === true;
 
             let tempKarnety = parsedKarnety.map((k: any) => {
               if (isContractPassCheck(k)) {
@@ -1270,18 +1271,17 @@ export default function KarnetyPage() {
               continuityBroken = true;
             }
 
-            const shouldPersistContinuityLoss = continuityBroken && (c.hasLostContinuity !== true || (c.rabat !== undefined && c.rabat !== null && Number(c.rabat) > 0));
+            const shouldPersistContinuityLoss = continuityBroken && (c.has_lost_continuity !== true && c.hasLostContinuity !== true || (c.rabat !== undefined && c.rabat !== null && Number(c.rabat) > 0));
 
             if (karnetyChanged || walletChanged || shouldPersistContinuityLoss) {
               try {
                 const updatePayload: any = {
                   karnetyKlubowicza: verifiedKarnety,
+                  has_lost_continuity: continuityBroken,
                   hasLostContinuity: continuityBroken,
                   continuityBreakNotice: continuityNotice,
                   ...(continuityBroken ? { 
                     rabat: 0, 
-                    rabat_za_ciaglosc: '0%', 
-                    'Rabat za ciągłość': '0%', 
                     cyklCiaglosci: 1 
                   } : {})
                 };
@@ -1382,6 +1382,7 @@ export default function KarnetyPage() {
               urodziny_rabat_rok: c.urodziny_rabat_rok || null,
               ostatnie_zyczenia_rok: c.ostatnie_zyczenia_rok || null,
               hasLostContinuity: continuityBroken,
+              has_lost_continuity: continuityBroken,
               continuityBreakNotice: continuityNotice,
               rabat: continuityBroken ? 0 : c.rabat,
               rabat_za_ciaglosc: continuityBroken ? '0%' : (rawContinuity !== null ? `${rawContinuity}%` : null),
@@ -1421,10 +1422,10 @@ export default function KarnetyPage() {
                Urodziny: null,
                urodziny_rabat_rok: null,
                ostatnie_zyczenia_rok: null,
+               has_lost_continuity: false,
                hasLostContinuity: false,
                continuityBreakNotice: null,
                rabat: 0,
-               rabat_za_ciaglosc: '0%',
                system_discount_offset: 0,
                umowa_oplacona_do: null,
                ambassador_claimed_tier_id: null,
@@ -1444,6 +1445,7 @@ export default function KarnetyPage() {
                  urodziny_rabat_rok: null,
                  ostatnie_zyczenia_rok: null,
                  hasLostContinuity: false,
+                 has_lost_continuity: false,
                  continuityBreakNotice: null,
                  rabat: 0,
                  rabat_za_ciaglosc: '0%',
@@ -1863,6 +1865,7 @@ export default function KarnetyPage() {
           finalRabatInt,
           finalCyklInt,
           hasLostContinuity: false,
+          has_lost_continuity: false,
           cenaStr,
           walletDeduction,
           kwota_portfel: walletDeduction,
@@ -1929,6 +1932,7 @@ export default function KarnetyPage() {
         dbPayload.rabat = finalRabatInt;
         dbPayload.cyklCiaglosci = finalCyklInt;
         dbPayload.hasLostContinuity = false;
+        dbPayload.has_lost_continuity = false;
       }
 
       if (ambassadorClaimedTierToPersist) {
@@ -2043,6 +2047,7 @@ export default function KarnetyPage() {
         rabat: finalRabatInt,
         cyklCiaglosci: finalCyklInt,
         hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
+        has_lost_continuity: dbPayload.has_lost_continuity !== undefined ? dbPayload.has_lost_continuity : currentUser.has_lost_continuity,
         Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
         portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
         wallet: nowyStanPortfelaStr,
@@ -2069,7 +2074,7 @@ export default function KarnetyPage() {
       setIsProcessingPayment(false);
     }
   };
-  // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO (Z BLOKADĄ WIELOKLIKU I ANTY-SPAMEM)
+  // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO (Z BLOKADĄ WIELOKLIKU I WYKLUCZENIEM Z CIĄGŁOŚCI KARNETÓW <= 150 ZŁ I 0 ZŁ)
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -2141,16 +2146,28 @@ export default function KarnetyPage() {
       const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
       const discountAmount = Math.max(0, calculatedFirstPayment - cenaPoRabacie);
 
+      // Karnety darmowe (0 zł / Medicover) oraz <= 150 zł NIE biorą udziału w programie ciągłości
+      const isFreeOrLowCost = calculatedFirstPayment <= 150 || basePriceNum <= 150 || cenaPoRabacie === 0 || selectedBuyPass.toLowerCase().includes('medicover');
+
       const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
       let nowaDataWygasnieciaStr = '';
 
+      // Wyliczanie najwyższego dotychczasowego cyklu – wyłącznie z płatnych karnetów powyżej 150 zł
       let baseCykl = 1;
-      if (updatedKarnetyList.length > 0) {
-        const highestCykl = Math.max(...updatedKarnetyList.map(k => (typeof k.cykl === 'number' ? k.cykl : 1)));
-        baseCykl = highestCykl;
+      const eligiblePaidPasses = updatedKarnetyList.filter(k => {
+        const pPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+        return pPrice > 150 && !isContractPassCheck(k);
+      });
+
+      if (eligiblePaidPasses.length > 0) {
+        baseCykl = Math.max(...eligiblePaidPasses.map(k => (typeof k.cykl === 'number' ? k.cykl : 1)));
       }
 
-      let nextCykl = isContract ? 1 : (appliedDiscountCode ? baseCykl : (updatedKarnetyList.length === 0 ? 1 : baseCykl + 1));
+      // Karnet darmowy lub <= 150 zł ma ZAWSZE cykl 1 i NIE podbija progresji
+      let nextCykl = (isContract || isFreeOrLowCost) 
+        ? 1 
+        : (appliedDiscountCode ? baseCykl : (eligiblePaidPasses.length === 0 ? 1 : baseCykl + 1));
+
       let statusTekst = '';
 
       updatedKarnetyList = updatedKarnetyList.filter((k: any) => {
@@ -2259,11 +2276,12 @@ export default function KarnetyPage() {
       let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
       let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-      if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
+      // Cykl ciągłości oraz rabat podbijamy TYLKO dla karnetów powyżej 150 zł
+      if (!isContract && !appliedDiscountCode && !isFreeOrLowCost && calculatedFirstPayment > 150) {
         const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
         let nextContinuityVal = currentContinuityVal;
         
-        if (currentUser.hasLostContinuity === true || currentUser.hasLostContinuity === 'true') {
+        if (currentUser.hasLostContinuity === true || currentUser.hasLostContinuity === 'true' || currentUser.has_lost_continuity === true) {
           nextContinuityVal = 0;
         } else {
           if (currentContinuityVal === 0) nextContinuityVal = 2;
@@ -2286,9 +2304,10 @@ export default function KarnetyPage() {
         const passMetadata = {
           updatedKarnetyList,
           urodziny_rabat_rok: (effectiveDiscount.isBirthday && !appliedDiscountCode) ? currentYear : null,
-          finalRabatInt,
-          finalCyklInt,
+          finalRabatInt: isFreeOrLowCost ? (currentUser.rabat || 0) : finalRabatInt,
+          finalCyklInt: isFreeOrLowCost ? (currentUser.cyklCiaglosci || 1) : finalCyklInt,
           hasLostContinuity: false,
+          has_lost_continuity: false,
           cenaStr,
           walletDeduction,
           kwota_portfel: walletDeduction,
@@ -2325,10 +2344,11 @@ export default function KarnetyPage() {
         dbPayload.urodziny_rabat_rok = currentYear;
       }
 
-      if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
+      if (!isContract && !appliedDiscountCode && !isFreeOrLowCost && calculatedFirstPayment > 150) {
         dbPayload.rabat = finalRabatInt;
         dbPayload.cyklCiaglosci = finalCyklInt;
         dbPayload.hasLostContinuity = false;
+        dbPayload.has_lost_continuity = false;
       }
 
       if (ambassadorClaimedTierToPersist) {
@@ -2422,9 +2442,10 @@ export default function KarnetyPage() {
         karnetyKlubowicza: updatedKarnetyList,
         Wygasa: latestExpiryDate,
         urodziny_rabat_rok: dbPayload.urodziny_rabat_rok !== undefined ? dbPayload.urodziny_rabat_rok : currentUser.urodziny_rabat_rok,
-        rabat: finalRabatInt,
-        cyklCiaglosci: finalCyklInt,
+        rabat: isFreeOrLowCost ? (currentUser.rabat || 0) : finalRabatInt,
+        cyklCiaglosci: isFreeOrLowCost ? (currentUser.cyklCiaglosci || 1) : finalCyklInt,
         hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
+        has_lost_continuity: dbPayload.has_lost_continuity !== undefined ? dbPayload.has_lost_continuity : currentUser.has_lost_continuity,
         Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
         portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
         wallet: nowyStanPortfelaStr,
@@ -3266,6 +3287,7 @@ export default function KarnetyPage() {
                     if (karnet.pozostaloWejsc <= 2) isExpiring = true;
                   }
                 }
+
                 let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; 
                 if (isLatePaymentBlocked) statusColorClass = 'bg-rose-100 text-rose-800 border-rose-300';
                 else if (isSuspendedLocal) statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
@@ -3531,7 +3553,6 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
-
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
