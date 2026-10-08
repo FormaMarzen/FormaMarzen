@@ -9,6 +9,16 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export type TransactionCategory = 'all' | 'karnet' | 'portfel' | 'wyzwanie' | 'odziez' | 'sklep';
 
+export interface PaymentBreakdown {
+  autopay: number;
+  portfel: number;
+  gotowka: number;
+  karta: number;
+  kodRabatowy?: string;
+  rabatKwota?: number;
+  isMixed: boolean;
+}
+
 interface TransactionItem {
   id: string | number;
   createdAt: string;
@@ -21,6 +31,7 @@ interface TransactionItem {
   typKategoria: 'karnet' | 'portfel' | 'wyzwanie' | 'odziez' | 'sklep';
   kwota: number;
   opis: string;
+  rozbicie: PaymentBreakdown;
 }
 
 export default function TransactionsPage() {
@@ -71,13 +82,109 @@ export default function TransactionsPage() {
     return null;
   };
 
+  // Szczegółowe parsowanie metod płatności (kolumny z bazy, JSON metadata oraz parsowanie tekstu z opisu)
+  const parsePaymentBreakdown = (record: any, opis: string, totalKwota: number): PaymentBreakdown => {
+    let autopay = 0;
+    let portfel = 0;
+    let gotowka = 0;
+    let karta = 0;
+    let kodRabatowy: string | undefined = undefined;
+    let rabatKwota: number | undefined = undefined;
+
+    const meta = typeof record.metadata === 'object' && record.metadata !== null ? record.metadata : {};
+
+    // 1. Sprawdzenie dedykowanych pól w bazie lub w obiekcie JSON metadata
+    if (record.kwota_autopay !== undefined && record.kwota_autopay !== null) {
+      autopay = parseFloat(record.kwota_autopay) || 0;
+    } else if (meta.autopay !== undefined) {
+      autopay = parseFloat(meta.autopay) || 0;
+    }
+
+    if (record.kwota_portfel !== undefined && record.kwota_portfel !== null) {
+      portfel = parseFloat(record.kwota_portfel) || 0;
+    } else if (meta.portfel !== undefined) {
+      portfel = parseFloat(meta.portfel) || 0;
+    }
+
+    if (record.kod_rabatowy) {
+      kodRabatowy = String(record.kod_rabatowy).trim();
+    } else if (meta.kod_rabatowy || meta.kod) {
+      kodRabatowy = String(meta.kod_rabatowy || meta.kod).trim();
+    }
+
+    if (record.rabat_kwota !== undefined && record.rabat_kwota !== null) {
+      rabatKwota = parseFloat(record.rabat_kwota) || 0;
+    } else if (meta.rabat_kwota !== undefined || meta.rabat !== undefined) {
+      rabatKwota = parseFloat(meta.rabat_kwota || meta.rabat) || 0;
+    }
+
+    // 2. Jeśli brakuje rozbicia w kolumnach, parsujemy tekst z opisu transakcji
+    const opisLower = opis.toLowerCase();
+
+    if (autopay === 0) {
+      const matchAutopay = opis.match(/autopay[:\s]*(\d+(?:[.,]\d{1,2})?)/i);
+      if (matchAutopay && matchAutopay[1]) {
+        autopay = parseFloat(matchAutopay[1].replace(',', '.'));
+      }
+    }
+
+    if (portfel === 0) {
+      const matchPortfel = opis.match(/portfel(?:em)?[:\s]*(\d+(?:[.,]\d{1,2})?)/i);
+      if (matchPortfel && matchPortfel[1]) {
+        portfel = parseFloat(matchPortfel[1].replace(',', '.'));
+      }
+    }
+
+    if (!kodRabatowy) {
+      const matchKod = opis.match(/kod(?: rabatowy)?[:\s]+([A-Z0-9_\-]+)/i);
+      if (matchKod && matchKod[1]) {
+        kodRabatowy = matchKod[1].toUpperCase();
+      }
+    }
+
+    if (rabatKwota === undefined) {
+      const matchRabatKwota = opis.match(/rabat[:\s]*(\d+(?:[.,]\d{1,2})?)/i);
+      if (matchRabatKwota && matchRabatKwota[1]) {
+        rabatKwota = parseFloat(matchRabatKwota[1].replace(',', '.'));
+      }
+    }
+
+    // 3. Fallback: Jeśli kwoty składowe są puste, wyznaczamy dominującą metodę na podstawie opisu i typu
+    if (autopay === 0 && portfel === 0 && gotowka === 0 && karta === 0) {
+      if (opisLower.includes('autopay') || (record.typ_operacji || '').toLowerCase().includes('autopay')) {
+        autopay = totalKwota;
+      } else if (opisLower.includes('portfel') || (record.typ_operacji || '').toLowerCase().includes('portfel')) {
+        portfel = totalKwota;
+      } else if (opisLower.includes('gotówk') || opisLower.includes('gotowk')) {
+        gotowka = totalKwota;
+      } else if (opisLower.includes('karta') || opisLower.includes('terminal')) {
+        karta = totalKwota;
+      } else {
+        // Domyślnie dla płatności online
+        autopay = totalKwota;
+      }
+    }
+
+    const nonZeroMethods = [autopay > 0, portfel > 0, gotowka > 0, karta > 0].filter(Boolean).length;
+    const isMixed = nonZeroMethods > 1 || !!kodRabatowy;
+
+    return {
+      autopay,
+      portfel,
+      gotowka,
+      karta,
+      kodRabatowy,
+      rabatKwota,
+      isMixed
+    };
+  };
+
   const fetchTransactions = useCallback(async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     setIsLoading(true);
 
     try {
-      // Pobieramy transakcje oraz listę klientów
       const [transakcjeRes, klienciRes] = await Promise.all([
         supabase
           .from('transakcje')
@@ -101,7 +208,6 @@ export default function TransactionsPage() {
         clientsMap.set(String(k.id), k);
       });
 
-      // Czarna lista zdarzeń czysto technicznych, modyfikacji i audytu
       const ignoredTypes = new Set([
         'zajecia_zapis',
         'zajecia_wypis',
@@ -124,7 +230,6 @@ export default function TransactionsPage() {
         const typLower = (t.typ_operacji || '').toLowerCase().trim();
         const opisLower = (t.opis || '').toLowerCase();
 
-        // 1. Odrzucenie wpisów technicznych i audytowych
         if (ignoredTypes.has(typLower)) return;
         if (
           opisLower.includes('ręczna modyfikacja') ||
@@ -137,7 +242,6 @@ export default function TransactionsPage() {
           return;
         }
 
-        // 2. Weryfikacja kwoty - tylko rzeczywiste transakcje finansowe
         const parsedKwota = extractAmount(t.kwota, t.opis || '');
         if (parsedKwota === null || parsedKwota <= 0) {
           return;
@@ -159,6 +263,8 @@ export default function TransactionsPage() {
           ? ''
           : `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
 
+        const breakdown = parsePaymentBreakdown(t, t.opis || '', parsedKwota);
+
         enriched.push({
           id: t.id,
           createdAt: t.created_at,
@@ -170,7 +276,8 @@ export default function TransactionsPage() {
           typOperacji: t.typ_operacji || 'płatność',
           typKategoria: detectCategory(t.typ_operacji || '', t.opis || ''),
           kwota: parsedKwota,
-          opis: t.opis || 'Operacja finansowa'
+          opis: t.opis || 'Operacja finansowa',
+          rozbicie: breakdown
         });
       });
 
@@ -206,7 +313,8 @@ export default function TransactionsPage() {
         t.klientImieNazwisko.toLowerCase().includes(query) ||
         t.klientEmail.toLowerCase().includes(query) ||
         t.opis.toLowerCase().includes(query) ||
-        t.typOperacji.toLowerCase().includes(query);
+        t.typOperacji.toLowerCase().includes(query) ||
+        (t.rozbicie.kodRabatowy && t.rozbicie.kodRabatowy.toLowerCase().includes(query));
 
       if (!matchesSearch) return false;
       if (categoryFilter !== 'all' && t.typKategoria !== categoryFilter) return false;
@@ -215,7 +323,6 @@ export default function TransactionsPage() {
     });
   }, [transactions, searchQuery, categoryFilter]);
 
-  // Podsumowanie finansowe (wszystkie transakcje to przychód dla klubu)
   const totalRevenue = useMemo(() => {
     return filteredTransactions.reduce((acc, curr) => acc + curr.kwota, 0);
   }, [filteredTransactions]);
@@ -227,14 +334,28 @@ export default function TransactionsPage() {
     return totalRevenue / totalTransactionsCount;
   }, [totalRevenue, totalTransactionsCount]);
 
-  // Eksport do pliku CSV
+  // Eksport do pliku CSV z uwzględnieniem rozbicia płatności
   const handleExportCSV = () => {
     if (filteredTransactions.length === 0) {
       alert("Brak danych do wyeksportowania.");
       return;
     }
 
-    const headers = ["Data", "Godzina", "Klubowicz", "Email", "Kategoria", "Typ operacji", "Wpływ (PLN)", "Opis"];
+    const headers = [
+      "Data", 
+      "Godzina", 
+      "Klubowicz", 
+      "Email", 
+      "Kategoria", 
+      "Typ operacji", 
+      "Wpływ całkowity (PLN)", 
+      "AutoPay (PLN)", 
+      "Portfel (PLN)", 
+      "Kod Rabatowy", 
+      "Rabat (PLN)", 
+      "Opis"
+    ];
+    
     const rows = filteredTransactions.map(t => [
       t.dataOperacji,
       t.godzinaOperacji,
@@ -243,6 +364,10 @@ export default function TransactionsPage() {
       t.typKategoria.toUpperCase(),
       `"${t.typOperacji.replace(/"/g, '""')}"`,
       t.kwota.toFixed(2),
+      t.rozbicie.autopay > 0 ? t.rozbicie.autopay.toFixed(2) : "0.00",
+      t.rozbicie.portfel > 0 ? t.rozbicie.portfel.toFixed(2) : "0.00",
+      t.rozbicie.kodRabatowy ? `"${t.rozbicie.kodRabatowy.replace(/"/g, '""')}"` : "-",
+      t.rozbicie.rabatKwota ? t.rozbicie.rabatKwota.toFixed(2) : "0.00",
       `"${t.opis.replace(/"/g, '""')}"`
     ]);
 
@@ -251,7 +376,7 @@ export default function TransactionsPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `Wplywy_Finansowe_${startDate}_${endDate}.csv`);
+    link.setAttribute("download", `Transakcje_Wplywy_${startDate}_${endDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -302,7 +427,7 @@ export default function TransactionsPage() {
             <span>💳</span> Rejestr Transakcji Finansowych
           </h1>
           <p className="text-xs text-slate-500 font-medium mt-1">
-            Zestawienie rzeczywistych wpływów finansowych: karnety, portfel, wyzwania, odzież oraz sklep
+            Zestawienie rzeczywistych wpływów finansowych oraz rozbicie metod płatności (AutoPay, Portfel, Kody rabatowe)
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -368,7 +493,7 @@ export default function TransactionsPage() {
             <span className="absolute left-4 top-3 text-slate-400">🔍</span>
             <input 
               type="text"
-              placeholder="Szukaj po klubowiczu, mailu, opisie..."
+              placeholder="Szukaj po klubowiczu, mailu, kodzie rabatowym, opisie..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-sky-50 border border-sky-100 rounded-2xl pl-11 pr-4 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-sky-500 transition-colors font-medium"
@@ -477,13 +602,14 @@ export default function TransactionsPage() {
                 <th className="py-4 px-6 font-bold whitespace-nowrap">Klubowicz</th>
                 <th className="py-4 px-6 font-bold whitespace-nowrap">Kategoria</th>
                 <th className="py-4 px-6 font-bold whitespace-nowrap">Wpływ</th>
+                <th className="py-4 px-6 font-bold whitespace-nowrap">Metoda / Rozbicie</th>
                 <th className="py-4 px-6 font-bold">Opis transakcji</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-sky-100/50 text-slate-700">
               {isLoading ? (
                 <tr>
-                  <td colSpan={5} className="py-16 text-center">
+                  <td colSpan={6} className="py-16 text-center">
                     <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-sky-600 border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]"></div>
                     <div className="mt-4 text-sm font-bold text-sky-900 uppercase tracking-wider">Wczytywanie operacji finansowych...</div>
                   </td>
@@ -511,6 +637,60 @@ export default function TransactionsPage() {
                         +{t.kwota.toFixed(2)} PLN
                       </span>
                     </td>
+                    
+                    {/* Nowa kolumna: Metoda i Rozbicie Płatności */}
+                    <td className="py-4 px-6 whitespace-nowrap">
+                      <div className="flex flex-col gap-1">
+                        {/* Wpłata AutoPay */}
+                        {t.rozbicie.autopay > 0 && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-[10px] font-bold">
+                            <span>⚡ AutoPay:</span>
+                            <span className="font-mono font-black">{t.rozbicie.autopay.toFixed(2)} PLN</span>
+                          </div>
+                        )}
+
+                        {/* Potrącenie z Portfela */}
+                        {t.rozbicie.portfel > 0 && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-sky-50 border border-sky-200 text-sky-800 rounded-lg text-[10px] font-bold">
+                            <span>💰 Portfel:</span>
+                            <span className="font-mono font-black">{t.rozbicie.portfel.toFixed(2)} PLN</span>
+                          </div>
+                        )}
+
+                        {/* Gotówka */}
+                        {t.rozbicie.gotowka > 0 && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-[10px] font-bold">
+                            <span>💵 Gotówka:</span>
+                            <span className="font-mono font-black">{t.rozbicie.gotowka.toFixed(2)} PLN</span>
+                          </div>
+                        )}
+
+                        {/* Karta */}
+                        {t.rozbicie.karta > 0 && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg text-[10px] font-bold">
+                            <span>💳 Karta:</span>
+                            <span className="font-mono font-black">{t.rozbicie.karta.toFixed(2)} PLN</span>
+                          </div>
+                        )}
+
+                        {/* Kod rabatowy */}
+                        {t.rozbicie.kodRabatowy && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-800 rounded-lg text-[10px] font-bold">
+                            <span>🎟️ Kod:</span>
+                            <span className="font-mono font-black uppercase">{t.rozbicie.kodRabatowy}</span>
+                            {t.rozbicie.rabatKwota !== undefined && t.rozbicie.rabatKwota > 0 && (
+                              <span className="text-purple-600">(-{t.rozbicie.rabatKwota.toFixed(2)} PLN)</span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Brak rozbicia */}
+                        {t.rozbicie.autopay === 0 && t.rozbicie.portfel === 0 && t.rozbicie.gotowka === 0 && t.rozbicie.karta === 0 && !t.rozbicie.kodRabatowy && (
+                          <span className="text-[10px] text-slate-400 font-mono italic">Płatność standardowa</span>
+                        )}
+                      </div>
+                    </td>
+
                     <td className="py-4 px-6">
                       <div className="font-medium text-slate-800 leading-snug">{t.opis}</div>
                       <div className="text-[9px] text-slate-400 font-mono uppercase mt-1">Typ: {t.typOperacji}</div>
@@ -519,7 +699,7 @@ export default function TransactionsPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="py-16 text-center text-slate-400">
+                  <td colSpan={6} className="py-16 text-center text-slate-400">
                     <div className="text-4xl mb-3">💳</div>
                     <div className="font-bold text-slate-600 uppercase tracking-wider">Brak operacji finansowych w wybranym okresie</div>
                     <div className="text-xs mt-1">Wybierz inny zakres dat lub zmień filtr kategorii.</div>
