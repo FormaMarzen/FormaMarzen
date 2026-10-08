@@ -1710,7 +1710,7 @@ export default function KarnetyPage() {
     return true;
   });
 
-  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY UMOWY (Z PEŁNĄ DYNAMICZNĄ OBSŁUGĄ MIANOWNIKA X/Y)
+  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY UMOWY (Z PEŁNĄ DYNAMICZNĄ OBSŁUGĄ MIANOWNIKA X/Y ORAZ BLOKADĄ ANTY-DUPLIKACYJNĄ)
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend || isProcessingPayment || isSubmittingRef.current) return;
@@ -1723,218 +1723,636 @@ export default function KarnetyPage() {
       return;
     }
 
-    const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
-    const isContract = isContractPassCheck(passToExtend) || isContractPassCheck(defKarnetu);
-    
-    let nextRataStr = '1 / 1';
-    let nowaDataWygasnieciaStr = '';
-    let isBonus13thPeriod = false;
-    let bonusDaysAmount = 0;
+    isSubmittingRef.current = true;
+    setIsProcessingPayment(true);
 
-    let basePriceNum = 0;
-    if (isContract && passToExtend.cena) {
-      basePriceNum = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]/g, "")) || 0;
-    } else if (defKarnetu) {
-      basePriceNum = parseFloat(defKarnetu.cena) || 0;
-    } else {
-      basePriceNum = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]/g, "")) || 0;
-    }
+    try {
+      const defKarnetu = dostepneKarnety.find(k => k.nazwa === passToExtend.nazwa);
+      const isContract = isContractPassCheck(passToExtend) || isContractPassCheck(defKarnetu);
+      
+      let nextRataStr = '1 / 1';
+      let nowaDataWygasnieciaStr = '';
+      let isBonus13thPeriod = false;
+      let bonusDaysAmount = 0;
 
-    if (isContract) {
-      const contractInfo = getContractRataInfo(passToExtend);
-
-      if (contractInfo.canActivateBonus) {
-        isBonus13thPeriod = true;
-        bonusDaysAmount = contractInfo.totalSuspUsed;
-        nextRataStr = `Bonus / ${contractInfo.maxRata || 12}`;
-
-        let baseDate = new Date();
-        if (passToExtend.waznyDo) {
-          const parts = passToExtend.waznyDo.split('-');
-          if (parts.length === 3) {
-            const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-            if (exp > baseDate) baseDate = exp;
-          }
-        }
-        baseDate.setDate(baseDate.getDate() + bonusDaysAmount);
-        nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
-        basePriceNum = 0;
+      let basePriceNum = 0;
+      if (isContract && passToExtend.cena) {
+        basePriceNum = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]/g, "")) || 0;
+      } else if (defKarnetu) {
+        basePriceNum = parseFloat(defKarnetu.cena) || 0;
       } else {
-        const maxRata = contractInfo.maxRata || 12;
-        const nextRataNum = Math.min(maxRata, contractInfo.rataNum + 1);
-        nextRataStr = `${nextRataNum} / ${maxRata}`;
-        nowaDataWygasnieciaStr = getContractEndOfMonthDate(passToExtend.waznyDo);
+        basePriceNum = parseFloat((passToExtend.cena || '0').replace(/[^0-9.-]/g, "")) || 0;
       }
-    } else {
-      const isExpiredOrFinished = (passToExtend.waznyDo && passToExtend.waznyDo < todayStr);
-      const baseDateStr = (!isExpiredOrFinished && passToExtend.waznyDo) ? passToExtend.waznyDo : todayStr;
-      
-      nowaDataWygasnieciaStr = getCalendarExpiryDate(baseDateStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || passToExtend.dlugosc || passToExtend.limitCzasowy || '1 miesiąc');
-    }
 
-    const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
-    const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
+      if (isContract) {
+        const contractInfo = getContractRataInfo(passToExtend);
 
-    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum, passToExtend.nazwa);
-    const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
-    const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
+        if (contractInfo.canActivateBonus) {
+          isBonus13thPeriod = true;
+          bonusDaysAmount = contractInfo.totalSuspUsed;
+          nextRataStr = `Bonus / ${contractInfo.maxRata || 12}`;
 
-    const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
-    const walletDeduction = (!isBonus13thPeriod && useWalletFunds && cenaPoRabacie > 0) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
-    const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
-    const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
-    const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
-    const discountAmount = Math.max(0, basePriceNum - cenaPoRabacie);
-    
-    let updatedKarnetyList = [...karnetyList];
-
-    updatedKarnetyList = updatedKarnetyList.map(k => {
-      if (k.id === passToExtend.id) {
-        const nowaHistoria = [...(k.historiaPrzedluzen || []), {
-          data: todayStr,
-          staraWaznosc: k.waznyDo,
-          nowaWaznosc: nowaDataWygasnieciaStr,
-          rata: isContract ? nextRataStr : undefined,
-          cena: cenaStr,
-          rabat: appliedLabel,
-          portfelUzyto: walletDeduction > 0 ? `${walletDeduction.toFixed(2)} PLN` : null,
-          usedCode: appliedDiscountCode ? appliedDiscountCode.kod : null
-        }];
-        let statusFinalTekst = `Ważny do: ${nowaDataWygasnieciaStr}`;
-        if (isContract) {
-          if (isBonus13thPeriod) {
-            statusFinalTekst = `Umowa 12M (Bonus z zawieszenia: +${bonusDaysAmount} dni • Ważny do: ${nowaDataWygasnieciaStr})`;
-          } else {
-            statusFinalTekst = `Umowa 12M (Rata ${nextRataStr} • Ważny do: ${nowaDataWygasnieciaStr})`;
+          let baseDate = new Date();
+          if (passToExtend.waznyDo) {
+            const parts = passToExtend.waznyDo.split('-');
+            if (parts.length === 3) {
+              const exp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+              if (exp > baseDate) baseDate = exp;
+            }
           }
+          baseDate.setDate(baseDate.getDate() + bonusDaysAmount);
+          nowaDataWygasnieciaStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
+          basePriceNum = 0;
+        } else {
+          const maxRata = contractInfo.maxRata || 12;
+          const nextRataNum = Math.min(maxRata, contractInfo.rataNum + 1);
+          nextRataStr = `${nextRataNum} / ${maxRata}`;
+          nowaDataWygasnieciaStr = getContractEndOfMonthDate(passToExtend.waznyDo);
         }
-        return {
-          ...k,
-          waznyDo: nowaDataWygasnieciaStr,
-          cena: isBonus13thPeriod ? (k.cena || '0.00 PLN') : cenaStr,
-          cykl: nextCykl,
-          rata: isContract ? nextRataStr : (k.rata || '1 / 1'),
-          isContract12M: isContract,
-          bonusActivated: isBonus13thPeriod ? true : k.bonusActivated,
-          bonusClaimed: isBonus13thPeriod ? true : k.bonusClaimed,
-          blokadaDo: isContract ? null : k.blokadaDo,
-          powodBlokady: isContract ? null : k.powodBlokady,
-          historiaPrzedluzen: nowaHistoria,
-          znizkaProcentowa: isContract ? '' : appliedLabel,
-          statusTekst: statusFinalTekst
-        };
+      } else {
+        const isExpiredOrFinished = (passToExtend.waznyDo && passToExtend.waznyDo < todayStr);
+        const baseDateStr = (!isExpiredOrFinished && passToExtend.waznyDo) ? passToExtend.waznyDo : todayStr;
+        
+        nowaDataWygasnieciaStr = getCalendarExpiryDate(baseDateStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || passToExtend.dlugosc || passToExtend.limitCzasowy || '1 miesiąc');
       }
-      return k;
-    });
 
-    const currentYear = new Date().getFullYear();
-    let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
-    let finalCyklInt = currentUser.cyklCiaglosci || 1;
+      const currentCykl = typeof passToExtend.cykl === 'number' ? passToExtend.cykl : 1;
+      const nextCykl = isContract ? 1 : (appliedDiscountCode ? currentCykl : currentCykl + 1);
 
-    if (!isContract && !appliedDiscountCode && basePriceNum > 150) {
-      const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
-      let nextContinuityVal = currentContinuityVal;
+      const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum, passToExtend.nazwa);
+      const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(basePriceNum, effectiveDiscount, appliedDiscountCode);
+      const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
+
+      const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
+      const walletDeduction = (!isBonus13thPeriod && useWalletFunds && cenaPoRabacie > 0) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
+      const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
+      const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
+      const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+      const discountAmount = Math.max(0, basePriceNum - cenaPoRabacie);
       
-      if (currentContinuityVal === 0) nextContinuityVal = 2;
-      else if (currentContinuityVal === 2) nextContinuityVal = 4;
-      else if (currentContinuityVal >= 4) nextContinuityVal = Math.min(25, currentContinuityVal + 1);
+      let updatedKarnetyList = [...karnetyList];
 
-      finalRabatInt = nextContinuityVal;
-      finalCyklInt = finalCyklInt + 1;
-    }
+      updatedKarnetyList = updatedKarnetyList.map(k => {
+        if (k.id === passToExtend.id) {
+          const nowaHistoria = [...(k.historiaPrzedluzen || []), {
+            data: todayStr,
+            staraWaznosc: k.waznyDo,
+            nowaWaznosc: nowaDataWygasnieciaStr,
+            rata: isContract ? nextRataStr : undefined,
+            cena: cenaStr,
+            rabat: appliedLabel,
+            portfelUzyto: walletDeduction > 0 ? `${walletDeduction.toFixed(2)} PLN` : null,
+            usedCode: appliedDiscountCode ? appliedDiscountCode.kod : null
+          }];
+          let statusFinalTekst = `Ważny do: ${nowaDataWygasnieciaStr}`;
+          if (isContract) {
+            if (isBonus13thPeriod) {
+              statusFinalTekst = `Umowa 12M (Bonus z zawieszenia: +${bonusDaysAmount} dni • Ważny do: ${nowaDataWygasnieciaStr})`;
+            } else {
+              statusFinalTekst = `Umowa 12M (Rata ${nextRataStr} • Ważny do: ${nowaDataWygasnieciaStr})`;
+            }
+          }
+          return {
+            ...k,
+            waznyDo: nowaDataWygasnieciaStr,
+            cena: isBonus13thPeriod ? (k.cena || '0.00 PLN') : cenaStr,
+            cykl: nextCykl,
+            rata: isContract ? nextRataStr : (k.rata || '1 / 1'),
+            isContract12M: isContract,
+            bonusActivated: isBonus13thPeriod ? true : k.bonusActivated,
+            bonusClaimed: isBonus13thPeriod ? true : k.bonusClaimed,
+            blokadaDo: isContract ? null : k.blokadaDo,
+            powodBlokady: isContract ? null : k.powodBlokady,
+            historiaPrzedluzen: nowaHistoria,
+            znizkaProcentowa: isContract ? '' : appliedLabel,
+            statusTekst: statusFinalTekst
+          };
+        }
+        return k;
+      });
 
-    const ambassadorClaimedTierToPersist = (effectiveDiscount.ambassadorPercent > 0 && effectiveDiscount.ambassadorTierId)
-      ? effectiveDiscount.ambassadorTierId
-      : null;
+      const currentYear = new Date().getFullYear();
+      let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
+      let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-    if (amountToPayAutopay > 0 && !isBonus13thPeriod) {
-      const orderId = `EXT-${currentUser.id}-${Date.now()}`.substring(0, 32);
-      const opisOperacji = isContract 
-        ? `Rata ${nextRataStr} ${passToExtend.nazwa}`
-        : `Przedluzenie ${passToExtend.nazwa}`;
+      if (!isContract && !appliedDiscountCode && basePriceNum > 150) {
+        const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
+        let nextContinuityVal = currentContinuityVal;
+        
+        if (currentContinuityVal === 0) nextContinuityVal = 2;
+        else if (currentContinuityVal === 2) nextContinuityVal = 4;
+        else if (currentContinuityVal >= 4) nextContinuityVal = Math.min(25, currentContinuityVal + 1);
 
-      const passMetadata = {
-        updatedKarnetyList,
-        urodziny_rabat_rok: (effectiveDiscount.isBirthday && !appliedDiscountCode) ? currentYear : null,
-        finalRabatInt,
-        finalCyklInt,
-        hasLostContinuity: false,
-        cenaStr,
-        walletDeduction,
-        kwota_portfel: walletDeduction,
-        kwota_autopay: amountToPayAutopay,
-        newWalletBalance: nowyStanPortfelaStr,
-        defKarnetId: defKarnetu?.id || null,
-        kod_rabatowy: appliedDiscountCode?.kod || null,
-        kodRabatowy: appliedDiscountCode?.kod || null,
-        discountCode: appliedDiscountCode?.kod || null,
-        rabat_kwota: discountAmount,
-        rabatKwota: discountAmount,
-        discountAmount: discountAmount,
-        appliedDiscountCodeId: appliedDiscountCode?.id || null,
-        ambassador_claimed_tier_id: ambassadorClaimedTierToPersist,
-        isContract,
-        contractPassId: passToExtend.id,
-        contractPassName: passToExtend.nazwa,
-        currentRata: nextRataStr,
-        rata: nextRataStr,
-        targetPaidUntil: nowaDataWygasnieciaStr,
-        umowa_oplacona_do: isContract ? nowaDataWygasnieciaStr : null
+        finalRabatInt = nextContinuityVal;
+        finalCyklInt = finalCyklInt + 1;
+      }
+
+      const ambassadorClaimedTierToPersist = (effectiveDiscount.ambassadorPercent > 0 && effectiveDiscount.ambassadorTierId)
+        ? effectiveDiscount.ambassadorTierId
+        : null;
+
+      if (amountToPayAutopay > 0 && !isBonus13thPeriod) {
+        const orderId = `EXT-${currentUser.id}-${Date.now()}`.substring(0, 32);
+        const opisOperacji = isContract 
+          ? `Rata ${nextRataStr} ${passToExtend.nazwa}`
+          : `Przedluzenie ${passToExtend.nazwa}`;
+
+        const passMetadata = {
+          updatedKarnetyList,
+          urodziny_rabat_rok: (effectiveDiscount.isBirthday && !appliedDiscountCode) ? currentYear : null,
+          finalRabatInt,
+          finalCyklInt,
+          hasLostContinuity: false,
+          cenaStr,
+          walletDeduction,
+          kwota_portfel: walletDeduction,
+          kwota_autopay: amountToPayAutopay,
+          newWalletBalance: nowyStanPortfelaStr,
+          defKarnetId: defKarnetu?.id || null,
+          kod_rabatowy: appliedDiscountCode?.kod || null,
+          kodRabatowy: appliedDiscountCode?.kod || null,
+          discountCode: appliedDiscountCode?.kod || null,
+          rabat_kwota: discountAmount,
+          rabatKwota: discountAmount,
+          discountAmount: discountAmount,
+          appliedDiscountCodeId: appliedDiscountCode?.id || null,
+          ambassador_claimed_tier_id: ambassadorClaimedTierToPersist,
+          isContract,
+          contractPassId: passToExtend.id,
+          contractPassName: passToExtend.nazwa,
+          currentRata: nextRataStr,
+          rata: nextRataStr,
+          targetPaidUntil: nowaDataWygasnieciaStr,
+          umowa_oplacona_do: isContract ? nowaDataWygasnieciaStr : null
+        };
+
+        setIsExtendModalOpen(false);
+        resetDiscountState();
+        await redirectToAutopay(
+          amountToPayAutopay, 
+          orderId, 
+          opisOperacji, 
+          isContract ? 'contract_installment' : 'pass_extend', 
+          passMetadata
+        );
+        return;
+      }
+
+      // ZABEZPIECZENIE ANTY-SPAM DLA PRZEDŁUŻENIA (PORTFEL / 0 PLN)
+      const tenSecondsAgo = new Date(Date.now() - 10000).toISOString();
+      const { data: recentExtends } = await supabase
+        .from('transakcje')
+        .select('id')
+        .eq('klient_id', currentUser.id)
+        .gte('created_at', tenSecondsAgo)
+        .limit(1);
+
+      if (recentExtends && recentExtends.length > 0) {
+        showToast('Transakcja została już przetworzona.', 'info');
+        setIsExtendModalOpen(false);
+        resetDiscountState();
+        return;
+      }
+
+      const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || nowaDataWygasnieciaStr;
+
+      const dbPayload: any = {
+        karnetyKlubowicza: updatedKarnetyList,
+        Wygasa: latestExpiryDate
       };
+      
+      if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
+        dbPayload.urodziny_rabat_rok = currentYear;
+      }
 
+      if (!isContract && !appliedDiscountCode && basePriceNum > 150) {
+        dbPayload.rabat = finalRabatInt;
+        dbPayload.cyklCiaglosci = finalCyklInt;
+        dbPayload.hasLostContinuity = false;
+      }
+
+      if (ambassadorClaimedTierToPersist) {
+        dbPayload.ambassador_claimed_tier_id = ambassadorClaimedTierToPersist;
+      }
+
+      if (isContract) {
+        dbPayload.umowa_oplacona_do = nowaDataWygasnieciaStr;
+
+        const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę') || currentUser.powodBlokady?.toLowerCase().includes('wpłaty');
+        if (isBlockedForContract) {
+          dbPayload.blokadaDo = null;
+          dbPayload.powodBlokady = null;
+        }
+      }
+
+      const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
+        ? nowyStanPortfela
+        : nowyStanPortfelaStr;
+
+      dbPayload.Portfel = walletValToSave;
+      if ('portfel' in currentUser && currentUser.portfel !== undefined) {
+        dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null) ? nowyStanPortfela : walletValToSave;
+      }
+
+      if (!isBonus13thPeriod) {
+        if ('Cena' in currentUser && currentUser.Cena !== undefined) {
+          dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
+            ? cenaPoRabacie
+            : (typeof currentUser.Cena === 'string' && currentUser.Cena.includes('PLN') ? cenaStr : cenaPoRabacie);
+        } else if ('cena' in currentUser && currentUser.cena !== undefined) {
+          dbPayload.cena = (typeof currentUser.cena === 'number' || currentUser.cena === null)
+            ? cenaPoRabacie
+            : (typeof currentUser.cena === 'string' && currentUser.cena.includes('PLN') ? cenaStr : cenaPoRabacie);
+        } else {
+          dbPayload.Cena = cenaStr;
+        }
+      }
+
+      const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+
+      if (updateError) {
+        showToast(`Błąd bazy: ${updateError.message}`, 'error');
+        return;
+      }
+
+      let createdTransactionId: number | null = null;
+      if (cenaPoRabacie > 0) {
+        const opisOperacji = isContract 
+          ? `Opłacenie raty ${nextRataStr} umowy 12M: ${passToExtend.nazwa} (Portfel: -${walletDeduction.toFixed(2)} PLN)${appliedLabel ? ` ${appliedLabel}` : ''}`
+          : `Przedłużenie: ${passToExtend.nazwa} (Portfel: -${walletDeduction.toFixed(2)} PLN)${appliedLabel ? ` ${appliedLabel}` : ''}`;
+
+        const { data: transData } = await supabase.from('transakcje').insert([{
+          klient_id: currentUser.id,
+          typ_operacji: isContract ? 'oplata_raty_12m' : 'zakup_karnetu',
+          kwota: -walletDeduction,
+          opis: opisOperacji,
+          kwota_autopay: 0,
+          kwota_portfel: walletDeduction,
+          kod_rabatowy: appliedDiscountCode?.kod || null,
+          rabat_kwota: discountAmount
+        }]).select('id').maybeSingle();
+
+        if (transData?.id) createdTransactionId = transData.id;
+      } else if (isBonus13thPeriod) {
+        await supabase.from('transakcje').insert([{
+          klient_id: currentUser.id,
+          typ_operacji: 'bonus_zawieszenia_12m',
+          kwota: 0,
+          opis: `Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu wykorzystanego zawieszenia dla umowy 12M: ${passToExtend.nazwa}`,
+          kwota_autopay: 0,
+          kwota_portfel: 0,
+          kod_rabatowy: null,
+          rabat_kwota: 0
+        }]);
+      } else {
+        const { data: transData } = await supabase.from('transakcje').insert([{
+          klient_id: currentUser.id,
+          typ_operacji: 'zakup_karnetu',
+          kwota: 0,
+          opis: `Przedłużenie bezpłatnego karnetu: ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+          kwota_autopay: 0,
+          kwota_portfel: 0,
+          kod_rabatowy: appliedDiscountCode?.kod || null,
+          rabat_kwota: discountAmount
+        }]).select('id').maybeSingle();
+
+        if (transData?.id) createdTransactionId = transData.id;
+      }
+
+      if (appliedDiscountCode) {
+        await incrementCodeUsage(
+          appliedDiscountCode.id, 
+          currentUser.id, 
+          defKarnetu?.id || null, 
+          createdTransactionId
+        );
+      }
+      
+      await checkAndEvaluateAmbassadorReferral(currentUser.id, passToExtend.nazwa, cenaPoRabacie);
+
+      await triggerPushNotificationToAdmin(
+        'Opłata / Przedłużenie karnetu',
+        `${currentUser.firstName} ${currentUser.lastName} opłacił karnet: ${passToExtend.nazwa} (${cenaStr}).`
+      );
+
+      setCurrentUser({
+        ...currentUser,
+        karnetyKlubowicza: updatedKarnetyList,
+        Wygasa: latestExpiryDate,
+        urodziny_rabat_rok: dbPayload.urodziny_rabat_rok !== undefined ? dbPayload.urodziny_rabat_rok : currentUser.urodziny_rabat_rok,
+        rabat: finalRabatInt,
+        cyklCiaglosci: finalCyklInt,
+        hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
+        Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
+        portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
+        wallet: nowyStanPortfelaStr,
+        umowa_oplacona_do: dbPayload.umowa_oplacona_do !== undefined ? dbPayload.umowa_oplacona_do : currentUser.umowa_oplacona_do,
+        ambassador_claimed_tier_id: dbPayload.ambassador_claimed_tier_id !== undefined ? dbPayload.ambassador_claimed_tier_id : currentUser.ambassador_claimed_tier_id,
+        ambassadorDiscountPercent: ambassadorClaimedTierToPersist ? 0 : currentUser.ambassadorDiscountPercent,
+        blokadaDo: dbPayload.blokadaDo !== undefined ? dbPayload.blokadaDo : currentUser.blokadaDo,
+        powodBlokady: dbPayload.powodBlokady !== undefined ? dbPayload.powodBlokady : currentUser.powodBlokady
+      });
+      
+      if (isBonus13thPeriod) {
+        showToast(`Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu zawieszenia karnetu!`, 'success');
+      } else if (cenaPoRabacie === 0) {
+        showToast(`Karnet "${passToExtend.nazwa}" został pomyślnie opłacony (bezpłatnie).`, 'success');
+      } else {
+        showToast(isContract ? `Pomyślnie opłacono ratę ${nextRataStr} ze środków portfela (${cenaStr}).` : `Karnet "${passToExtend.nazwa}" został przedłużony ze środków portfela (${cenaStr}).`, 'success');
+      }
+      
       setIsExtendModalOpen(false);
       resetDiscountState();
-      await redirectToAutopay(
-        amountToPayAutopay, 
-        orderId, 
-        opisOperacji, 
-        isContract ? 'contract_installment' : 'pass_extend', 
-        passMetadata
-      );
-      return;
+      loadData();
+    } finally {
+      isSubmittingRef.current = false;
+      setIsProcessingPayment(false);
     }
+  };
+  // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO (Z BLOKADĄ WIELOKLIKU I ANTY-SPAMEM)
+  const handleBuyPassSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !selectedBuyPass) return;
+    if (isSubmittingRef.current || isProcessingPayment) return;
 
-    const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || nowaDataWygasnieciaStr;
+    isSubmittingRef.current = true;
+    setIsProcessingPayment(true);
 
-    const dbPayload: any = {
-      karnetyKlubowicza: updatedKarnetyList,
-      Wygasa: latestExpiryDate
-    };
-    
-    if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
-      dbPayload.urodziny_rabat_rok = currentYear;
-    }
+    try {
+      // 1. Zabezpieczenie przed podwójnym kliknięciem dla karnetów 0 PLN (np. Medicover) w bazie
+      const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
+      const { data: recentPurchases } = await supabase
+        .from('transakcje')
+        .select('id')
+        .eq('klient_id', currentUser.id)
+        .ilike('opis', `%${selectedBuyPass}%`)
+        .gte('created_at', fifteenSecondsAgo)
+        .limit(1);
 
-    if (!isContract && !appliedDiscountCode && basePriceNum > 150) {
-      dbPayload.rabat = finalRabatInt;
-      dbPayload.cyklCiaglosci = finalCyklInt;
-      dbPayload.hasLostContinuity = false;
-    }
-
-    if (ambassadorClaimedTierToPersist) {
-      dbPayload.ambassador_claimed_tier_id = ambassadorClaimedTierToPersist;
-    }
-
-    if (isContract) {
-      dbPayload.umowa_oplacona_do = nowaDataWygasnieciaStr;
-
-      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę') || currentUser.powodBlokady?.toLowerCase().includes('wpłaty');
-      if (isBlockedForContract) {
-        dbPayload.blokadaDo = null;
-        dbPayload.powodBlokady = null;
+      if (recentPurchases && recentPurchases.length > 0) {
+        showToast('Karnet został już aktywowany! Odświeżam widok...', 'info');
+        setSelectedBuyPass('');
+        setPendingQuantityPassData(null);
+        setIsBuyPassModalOpen(false);
+        resetDiscountState();
+        await loadData();
+        return;
       }
-    }
 
-    const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
-      ? nowyStanPortfela
-      : nowyStanPortfelaStr;
+      const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
+      const isNewQuantityPass = isQuantityPassCheck(defKarnetu);
+      
+      let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) 
+        ? [...currentUser.karnetyKlubowicza].filter(isPassActive) 
+        : [];
+      
+      const existingQuantityPass = updatedKarnetyList.find(k => isQuantityPassCheck(k));
 
-    dbPayload.Portfel = walletValToSave;
-    if ('portfel' in currentUser && currentUser.portfel !== undefined) {
-      dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null) ? nowyStanPortfela : walletValToSave;
-    }
+      if (isNewQuantityPass && existingQuantityPass && !pendingQuantityPassData?.confirmed) {
+        const leftover = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
+        setPendingQuantityPassData({
+          selectedBuyPass,
+          leftover,
+          confirmed: false
+        });
+        setIsQuantityTransferModalOpen(true);
+        return;
+      }
 
-    if (!isBonus13thPeriod) {
+      const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
+      const isContract = isContractPassCheck(defKarnetu) || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
+      
+      let calculatedFirstPayment = basePriceNum;
+      let contractInfo: any = null;
+
+      if (isContract) {
+        contractInfo = calculateContractProRata(basePriceNum);
+        calculatedFirstPayment = contractInfo.proRataFirstMonth;
+      }
+      
+      const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment, selectedBuyPass);
+      const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
+      const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
+
+      const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
+      const walletDeduction = (useWalletFunds && cenaPoRabacie > 0) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
+      const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
+      const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
+      const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+      const discountAmount = Math.max(0, calculatedFirstPayment - cenaPoRabacie);
+
+      const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
+      let nowaDataWygasnieciaStr = '';
+
+      let baseCykl = 1;
+      if (updatedKarnetyList.length > 0) {
+        const highestCykl = Math.max(...updatedKarnetyList.map(k => (typeof k.cykl === 'number' ? k.cykl : 1)));
+        baseCykl = highestCykl;
+      }
+
+      let nextCykl = isContract ? 1 : (appliedDiscountCode ? baseCykl : (updatedKarnetyList.length === 0 ? 1 : baseCykl + 1));
+      let statusTekst = '';
+
+      updatedKarnetyList = updatedKarnetyList.filter((k: any) => {
+        if (isContractPassCheck(k)) return true;
+        if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0) return false;
+        if (k.waznyDo && k.waznyDo < todayStr) return false;
+        return true;
+      });
+
+      let leftoverTransferredCount = 0;
+      if (isContract) {
+        nowaDataWygasnieciaStr = contractInfo.endOfFirstMonthStr;
+        statusTekst = `Umowa 12M (Rata 0/12 - wyrównanie do końca m-ca: ${contractInfo.remainingDays}/${contractInfo.totalDaysInMonth} dni)`;
+        
+        const nowyKarnetObj = {
+          id: Date.now(),
+          nazwa: selectedBuyPass,
+          waznyDo: nowaDataWygasnieciaStr,
+          pozostaloWejsc: null,
+          poczatkoweWejsc: null,
+          cena: `${basePriceNum.toFixed(2)} PLN`,
+          cykl: 1,
+          znizkaProcentowa: '',
+          rata: '0 / 12',
+          statusTekst: statusTekst,
+          isContract12M: true,
+          contractSuspensionDaysLeft: 30,
+          totalSuspendedDaysUsed: 0,
+          bonusActivated: false,
+          bonusClaimed: false,
+          blokadaDo: null,
+          powodBlokady: null,
+          zawieszonyOd: null,
+          zawieszonyDo: null,
+          historiaZawieszen: []
+        };
+        updatedKarnetyList.push(nowyKarnetObj);
+
+      } else if (isNewQuantityPass) {
+        let leftoverTransferred = 0;
+        if (existingQuantityPass) {
+          leftoverTransferred = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
+          leftoverTransferredCount = leftoverTransferred;
+          updatedKarnetyList = updatedKarnetyList.filter(k => k.id !== existingQuantityPass.id);
+        }
+
+        const parsedLimit = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 10;
+        const totalPoolEntries = parsedLimit + leftoverTransferred;
+
+        nowaDataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || '1 miesiąc');
+        statusTekst = `Ważny do: ${nowaDataWygasnieciaStr}`;
+
+        const nowyKarnetObj = {
+          id: Date.now(),
+          nazwa: selectedBuyPass,
+          waznyDo: nowaDataWygasnieciaStr,
+          pozostaloWejsc: totalPoolEntries,
+          poczatkoweWejsc: parsedLimit,
+          transferredEntries: leftoverTransferred,
+          cena: cenaStr,
+          cykl: nextCykl,
+          znizkaProcentowa: appliedLabel,
+          rata: '1 / 1',
+          statusTekst: statusTekst,
+          blokadaDo: null,
+          powodBlokady: null,
+          zawieszonyOd: null,
+          zawieszonyDo: null,
+          historiaZawieszen: []
+        };
+        updatedKarnetyList.push(nowyKarnetObj);
+
+      } else {
+        let baseStartDateStr = todayStr;
+        if (activationMode === 'after' && maxDateStr) {
+          baseStartDateStr = maxDateStr;
+        }
+
+        nowaDataWygasnieciaStr = getCalendarExpiryDate(baseStartDateStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || '1 miesiąc');
+
+        statusTekst = activationMode === 'after' 
+          ? `Oczekujący (Ważny od: ${maxDateStr} do: ${nowaDataWygasnieciaStr})`
+          : `Ważny do: ${nowaDataWygasnieciaStr}`;
+
+        const nowyKarnetObj = {
+          id: Date.now(),
+          nazwa: selectedBuyPass,
+          waznyDo: nowaDataWygasnieciaStr,
+          pozostaloWejsc: null,
+          poczatkoweWejsc: null,
+          cena: cenaStr,
+          cykl: nextCykl,
+          znizkaProcentowa: appliedLabel,
+          rata: '1 / 1',
+          statusTekst: statusTekst,
+          blokadaDo: null,
+          powodBlokady: null,
+          zawieszonyOd: null,
+          zawieszonyDo: null,
+          historiaZawieszen: []
+        };
+        updatedKarnetyList.push(nowyKarnetObj);
+      }
+
+      const currentYear = new Date().getFullYear();
+      let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
+      let finalCyklInt = currentUser.cyklCiaglosci || 1;
+
+      if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
+        const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
+        let nextContinuityVal = currentContinuityVal;
+        
+        if (currentUser.hasLostContinuity === true || currentUser.hasLostContinuity === 'true') {
+          nextContinuityVal = 0;
+        } else {
+          if (currentContinuityVal === 0) nextContinuityVal = 2;
+          else if (currentContinuityVal === 2) nextContinuityVal = 4;
+          else if (currentContinuityVal >= 4) nextContinuityVal = Math.min(25, currentContinuityVal + 1);
+        }
+
+        finalRabatInt = nextContinuityVal;
+        finalCyklInt = finalCyklInt + 1;
+      }
+
+      const ambassadorClaimedTierToPersist = (effectiveDiscount.ambassadorPercent > 0 && effectiveDiscount.ambassadorTierId)
+        ? effectiveDiscount.ambassadorTierId
+        : null;
+
+      if (amountToPayAutopay > 0) {
+        const orderId = `BUY-${currentUser.id}-${Date.now()}`.substring(0, 32);
+        const opisOperacji = `Zakup ${selectedBuyPass}`;
+
+        const passMetadata = {
+          updatedKarnetyList,
+          urodziny_rabat_rok: (effectiveDiscount.isBirthday && !appliedDiscountCode) ? currentYear : null,
+          finalRabatInt,
+          finalCyklInt,
+          hasLostContinuity: false,
+          cenaStr,
+          walletDeduction,
+          kwota_portfel: walletDeduction,
+          kwota_autopay: amountToPayAutopay,
+          newWalletBalance: nowyStanPortfelaStr,
+          defKarnetId: defKarnetu?.id || null,
+          kod_rabatowy: appliedDiscountCode?.kod || null,
+          kodRabatowy: appliedDiscountCode?.kod || null,
+          discountCode: appliedDiscountCode?.kod || null,
+          rabat_kwota: discountAmount,
+          rabatKwota: discountAmount,
+          discountAmount: discountAmount,
+          appliedDiscountCodeId: appliedDiscountCode?.id || null,
+          umowa_oplacona_do: isContract && contractInfo ? contractInfo.endOfFirstMonthStr : null,
+          ambassador_claimed_tier_id: ambassadorClaimedTierToPersist,
+          transferredEntries: leftoverTransferredCount
+        };
+
+        setIsBuyPassModalOpen(false);
+        setPendingQuantityPassData(null);
+        resetDiscountState();
+        await redirectToAutopay(amountToPayAutopay, orderId, opisOperacji, 'pass_purchase', passMetadata);
+        return;
+      }
+
+      const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || nowaDataWygasnieciaStr;
+
+      const dbPayload: any = {
+        karnetyKlubowicza: updatedKarnetyList,
+        Wygasa: latestExpiryDate
+      };
+      
+      if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
+        dbPayload.urodziny_rabat_rok = currentYear;
+      }
+
+      if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
+        dbPayload.rabat = finalRabatInt;
+        dbPayload.cyklCiaglosci = finalCyklInt;
+        dbPayload.hasLostContinuity = false;
+      }
+
+      if (ambassadorClaimedTierToPersist) {
+        dbPayload.ambassador_claimed_tier_id = ambassadorClaimedTierToPersist;
+      }
+
+      if (isContract && contractInfo) {
+        dbPayload.umowa_oplacona_do = contractInfo.endOfFirstMonthStr;
+        const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę') || currentUser.powodBlokady?.toLowerCase().includes('wpłaty');
+        if (isBlockedForContract) {
+          dbPayload.blokadaDo = null;
+          dbPayload.powodBlokady = null;
+        }
+      }
+
+      const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
+        ? nowyStanPortfela
+        : nowyStanPortfelaStr;
+
+      dbPayload.Portfel = walletValToSave;
+      if ('portfel' in currentUser && currentUser.portfel !== undefined) {
+        dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null) ? nowyStanPortfela : walletValToSave;
+      }
+
       if ('Cena' in currentUser && currentUser.Cena !== undefined) {
         dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
           ? cenaPoRabacie
@@ -1946,458 +2364,92 @@ export default function KarnetyPage() {
       } else {
         dbPayload.Cena = cenaStr;
       }
-    }
 
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
+      const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
 
-    if (updateError) {
-      showToast(`Błąd bazy: ${updateError.message}`, 'error');
-      return;
-    }
-
-    let createdTransactionId: number | null = null;
-    if (cenaPoRabacie > 0) {
-      const opisOperacji = isContract 
-        ? `Opłacenie raty ${nextRataStr} umowy 12M: ${passToExtend.nazwa} (Portfel: -${walletDeduction.toFixed(2)} PLN)${appliedLabel ? ` ${appliedLabel}` : ''}`
-        : `Przedłużenie: ${passToExtend.nazwa} (Portfel: -${walletDeduction.toFixed(2)} PLN)${appliedLabel ? ` ${appliedLabel}` : ''}`;
-
-      const { data: transData } = await supabase.from('transakcje').insert([{
-        klient_id: currentUser.id,
-        typ_operacji: isContract ? 'oplata_raty_12m' : 'zakup_karnetu',
-        kwota: -walletDeduction,
-        opis: opisOperacji,
-        kwota_autopay: 0,
-        kwota_portfel: walletDeduction,
-        kod_rabatowy: appliedDiscountCode?.kod || null,
-        rabat_kwota: discountAmount
-      }]).select('id').maybeSingle();
-
-      if (transData?.id) createdTransactionId = transData.id;
-    } else if (isBonus13thPeriod) {
-      await supabase.from('transakcje').insert([{
-        klient_id: currentUser.id,
-        typ_operacji: 'bonus_zawieszenia_12m',
-        kwota: 0,
-        opis: `Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu wykorzystanego zawieszenia dla umowy 12M: ${passToExtend.nazwa}`,
-        kwota_autopay: 0,
-        kwota_portfel: 0,
-        kod_rabatowy: null,
-        rabat_kwota: 0
-      }]);
-    } else {
-      const { data: transData } = await supabase.from('transakcje').insert([{
-        klient_id: currentUser.id,
-        typ_operacji: 'zakup_karnetu',
-        kwota: 0,
-        opis: `Przedłużenie bezpłatnego karnetu: ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`,
-        kwota_autopay: 0,
-        kwota_portfel: 0,
-        kod_rabatowy: appliedDiscountCode?.kod || null,
-        rabat_kwota: discountAmount
-      }]).select('id').maybeSingle();
-
-      if (transData?.id) createdTransactionId = transData.id;
-    }
-
-    if (appliedDiscountCode) {
-      await incrementCodeUsage(
-        appliedDiscountCode.id, 
-        currentUser.id, 
-        defKarnetu?.id || null, 
-        createdTransactionId
-      );
-    }
-    
-    await checkAndEvaluateAmbassadorReferral(currentUser.id, passToExtend.nazwa, cenaPoRabacie);
-
-    await triggerPushNotificationToAdmin(
-      'Opłata / Przedłużenie karnetu',
-      `${currentUser.firstName} ${currentUser.lastName} opłacił karnet: ${passToExtend.nazwa} (${cenaStr}).`
-    );
-
-    setCurrentUser({
-      ...currentUser,
-      karnetyKlubowicza: updatedKarnetyList,
-      Wygasa: latestExpiryDate,
-      urodziny_rabat_rok: dbPayload.urodziny_rabat_rok !== undefined ? dbPayload.urodziny_rabat_rok : currentUser.urodziny_rabat_rok,
-      rabat: finalRabatInt,
-      cyklCiaglosci: finalCyklInt,
-      hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
-      Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
-      portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
-      wallet: nowyStanPortfelaStr,
-      umowa_oplacona_do: dbPayload.umowa_oplacona_do !== undefined ? dbPayload.umowa_oplacona_do : currentUser.umowa_oplacona_do,
-      ambassador_claimed_tier_id: dbPayload.ambassador_claimed_tier_id !== undefined ? dbPayload.ambassador_claimed_tier_id : currentUser.ambassador_claimed_tier_id,
-      ambassadorDiscountPercent: ambassadorClaimedTierToPersist ? 0 : currentUser.ambassadorDiscountPercent,
-      blokadaDo: dbPayload.blokadaDo !== undefined ? dbPayload.blokadaDo : currentUser.blokadaDo,
-      powodBlokady: dbPayload.powodBlokady !== undefined ? dbPayload.powodBlokady : currentUser.powodBlokady
-    });
-    
-    if (isBonus13thPeriod) {
-      showToast(`Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu zawieszenia karnetu!`, 'success');
-    } else if (cenaPoRabacie === 0) {
-      showToast(`Karnet "${passToExtend.nazwa}" został pomyślnie opłacony (bezpłatnie).`, 'success');
-    } else {
-      showToast(isContract ? `Pomyślnie opłacono ratę ${nextRataStr} ze środków portfela (${cenaStr}).` : `Karnet "${passToExtend.nazwa}" został przedłużony ze środków portfela (${cenaStr}).`, 'success');
-    }
-    
-    setIsExtendModalOpen(false);
-    resetDiscountState();
-    loadData();
-  };
-  // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO
-  const handleBuyPassSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser || !selectedBuyPass) return;
-    if (isSubmittingRef.current || isProcessingPayment) return;
-
-    const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedBuyPass);
-    const isNewQuantityPass = isQuantityPassCheck(defKarnetu);
-    
-    let updatedKarnetyList = Array.isArray(currentUser.karnetyKlubowicza) 
-      ? [...currentUser.karnetyKlubowicza].filter(isPassActive) 
-      : [];
-    
-    const existingQuantityPass = updatedKarnetyList.find(k => isQuantityPassCheck(k));
-
-    if (isNewQuantityPass && existingQuantityPass && !pendingQuantityPassData?.confirmed) {
-      const leftover = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
-      setPendingQuantityPassData({
-        selectedBuyPass,
-        leftover,
-        confirmed: false
-      });
-      setIsQuantityTransferModalOpen(true);
-      return;
-    }
-
-    const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
-    const isContract = isContractPassCheck(defKarnetu) || defKarnetu?.typ_karnetu === 'Umowa 12 miesięcy';
-    
-    let calculatedFirstPayment = basePriceNum;
-    let contractInfo: any = null;
-
-    if (isContract) {
-      contractInfo = calculateContractProRata(basePriceNum);
-      calculatedFirstPayment = contractInfo.proRataFirstMonth;
-    }
-    
-    const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment, selectedBuyPass);
-    const { finalPrice: cenaPoRabacie, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
-    const cenaStr = `${cenaPoRabacie.toFixed(2)} PLN`;
-
-    const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
-    const walletDeduction = (useWalletFunds && cenaPoRabacie > 0) ? Math.min(currentWalletNum, cenaPoRabacie) : 0;
-    const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
-    const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
-    const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
-    const discountAmount = Math.max(0, calculatedFirstPayment - cenaPoRabacie);
-
-    const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
-    let nowaDataWygasnieciaStr = '';
-
-    let baseCykl = 1;
-    if (updatedKarnetyList.length > 0) {
-      const highestCykl = Math.max(...updatedKarnetyList.map(k => (typeof k.cykl === 'number' ? k.cykl : 1)));
-      baseCykl = highestCykl;
-    }
-
-    let nextCykl = isContract ? 1 : (appliedDiscountCode ? baseCykl : (updatedKarnetyList.length === 0 ? 1 : baseCykl + 1));
-    let statusTekst = '';
-
-    updatedKarnetyList = updatedKarnetyList.filter((k: any) => {
-      if (isContractPassCheck(k)) return true;
-      if (k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0) return false;
-      if (k.waznyDo && k.waznyDo < todayStr) return false;
-      return true;
-    });
-
-    let leftoverTransferredCount = 0;
-    if (isContract) {
-      nowaDataWygasnieciaStr = contractInfo.endOfFirstMonthStr;
-      statusTekst = `Umowa 12M (Rata 0/12 - wyrównanie do końca m-ca: ${contractInfo.remainingDays}/${contractInfo.totalDaysInMonth} dni)`;
-      
-      const nowyKarnetObj = {
-        id: Date.now(),
-        nazwa: selectedBuyPass,
-        waznyDo: nowaDataWygasnieciaStr,
-        pozostaloWejsc: null,
-        poczatkoweWejsc: null,
-        cena: `${basePriceNum.toFixed(2)} PLN`,
-        cykl: 1,
-        znizkaProcentowa: '',
-        rata: '0 / 12',
-        statusTekst: statusTekst,
-        isContract12M: true,
-        contractSuspensionDaysLeft: 30,
-        totalSuspendedDaysUsed: 0,
-        bonusActivated: false,
-        bonusClaimed: false,
-        blokadaDo: null,
-        powodBlokady: null,
-        zawieszonyOd: null,
-        zawieszonyDo: null,
-        historiaZawieszen: []
-      };
-      updatedKarnetyList.push(nowyKarnetObj);
-
-    } else if (isNewQuantityPass) {
-      let leftoverTransferred = 0;
-      if (existingQuantityPass) {
-        leftoverTransferred = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
-        leftoverTransferredCount = leftoverTransferred;
-        updatedKarnetyList = updatedKarnetyList.filter(k => k.id !== existingQuantityPass.id);
+      if (updateError) {
+        showToast(`Błąd aktualizacji: ${updateError.message}`, 'error');
+        return;
       }
 
-      const parsedLimit = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : 10;
-      const totalPoolEntries = parsedLimit + leftoverTransferred;
+      let createdTransactionId: number | null = null;
+      if (cenaPoRabacie > 0) {
+        const { data: transData } = await supabase.from('transakcje').insert([{
+          klient_id: currentUser.id,
+          typ_operacji: 'zakup_karnetu',
+          kwota: -walletDeduction,
+          opis: `Zakup z portfela: ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+          kwota_autopay: 0,
+          kwota_portfel: walletDeduction,
+          kod_rabatowy: appliedDiscountCode?.kod || null,
+          rabat_kwota: discountAmount
+        }]).select('id').maybeSingle();
 
-      nowaDataWygasnieciaStr = getCalendarExpiryDate(todayStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || '1 miesiąc');
-      statusTekst = `Ważny do: ${nowaDataWygasnieciaStr}`;
-
-      const nowyKarnetObj = {
-        id: Date.now(),
-        nazwa: selectedBuyPass,
-        waznyDo: nowaDataWygasnieciaStr,
-        pozostaloWejsc: totalPoolEntries,
-        poczatkoweWejsc: parsedLimit,
-        transferredEntries: leftoverTransferred,
-        cena: cenaStr,
-        cykl: nextCykl,
-        znizkaProcentowa: appliedLabel,
-        rata: '1 / 1',
-        statusTekst: statusTekst,
-        blokadaDo: null,
-        powodBlokady: null,
-        zawieszonyOd: null,
-        zawieszonyDo: null,
-        historiaZawieszen: []
-      };
-      updatedKarnetyList.push(nowyKarnetObj);
-
-    } else {
-      let baseStartDateStr = todayStr;
-      if (activationMode === 'after' && maxDateStr) {
-        baseStartDateStr = maxDateStr;
-      }
-
-      nowaDataWygasnieciaStr = getCalendarExpiryDate(baseStartDateStr, defKarnetu?.limitCzasowy || defKarnetu?.dlugosc || '1 miesiąc');
-
-      statusTekst = activationMode === 'after' 
-        ? `Oczekujący (Ważny od: ${maxDateStr} do: ${nowaDataWygasnieciaStr})`
-        : `Ważny do: ${nowaDataWygasnieciaStr}`;
-
-      const nowyKarnetObj = {
-        id: Date.now(),
-        nazwa: selectedBuyPass,
-        waznyDo: nowaDataWygasnieciaStr,
-        pozostaloWejsc: null,
-        poczatkoweWejsc: null,
-        cena: cenaStr,
-        cykl: nextCykl,
-        znizkaProcentowa: appliedLabel,
-        rata: '1 / 1',
-        statusTekst: statusTekst,
-        blokadaDo: null,
-        powodBlokady: null,
-        zawieszonyOd: null,
-        zawieszonyDo: null,
-        historiaZawieszen: []
-      };
-      updatedKarnetyList.push(nowyKarnetObj);
-    }
-
-    const currentYear = new Date().getFullYear();
-    let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
-    let finalCyklInt = currentUser.cyklCiaglosci || 1;
-
-    if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
-      const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
-      let nextContinuityVal = currentContinuityVal;
-      
-      if (currentUser.hasLostContinuity === true || currentUser.hasLostContinuity === 'true') {
-        nextContinuityVal = 0;
+        if (transData?.id) createdTransactionId = transData.id;
       } else {
-        if (currentContinuityVal === 0) nextContinuityVal = 2;
-        else if (currentContinuityVal === 2) nextContinuityVal = 4;
-        else if (currentContinuityVal >= 4) nextContinuityVal = Math.min(25, currentContinuityVal + 1);
+        const { data: transData } = await supabase.from('transakcje').insert([{
+          klient_id: currentUser.id,
+          typ_operacji: 'zakup_karnetu',
+          kwota: 0,
+          opis: `Aktywacja bezpłatnego karnetu: ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
+          kwota_autopay: 0,
+          kwota_portfel: 0,
+          kod_rabatowy: appliedDiscountCode?.kod || null,
+          rabat_kwota: discountAmount
+        }]).select('id').maybeSingle();
+
+        if (transData?.id) createdTransactionId = transData.id;
       }
 
-      finalRabatInt = nextContinuityVal;
-      finalCyklInt = finalCyklInt + 1;
-    }
-
-    const ambassadorClaimedTierToPersist = (effectiveDiscount.ambassadorPercent > 0 && effectiveDiscount.ambassadorTierId)
-      ? effectiveDiscount.ambassadorTierId
-      : null;
-
-    if (amountToPayAutopay > 0) {
-      const orderId = `BUY-${currentUser.id}-${Date.now()}`.substring(0, 32);
-      const opisOperacji = `Zakup ${selectedBuyPass}`;
-
-      const passMetadata = {
-        updatedKarnetyList,
-        urodziny_rabat_rok: (effectiveDiscount.isBirthday && !appliedDiscountCode) ? currentYear : null,
-        finalRabatInt,
-        finalCyklInt,
-        hasLostContinuity: false,
-        cenaStr,
-        walletDeduction,
-        kwota_portfel: walletDeduction,
-        kwota_autopay: amountToPayAutopay,
-        newWalletBalance: nowyStanPortfelaStr,
-        defKarnetId: defKarnetu?.id || null,
-        kod_rabatowy: appliedDiscountCode?.kod || null,
-        kodRabatowy: appliedDiscountCode?.kod || null,
-        discountCode: appliedDiscountCode?.kod || null,
-        rabat_kwota: discountAmount,
-        rabatKwota: discountAmount,
-        discountAmount: discountAmount,
-        appliedDiscountCodeId: appliedDiscountCode?.id || null,
-        umowa_oplacona_do: isContract && contractInfo ? contractInfo.endOfFirstMonthStr : null,
-        ambassador_claimed_tier_id: ambassadorClaimedTierToPersist,
-        transferredEntries: leftoverTransferredCount
-      };
-
-      setIsBuyPassModalOpen(false);
-      setPendingQuantityPassData(null);
-      resetDiscountState();
-      await redirectToAutopay(amountToPayAutopay, orderId, opisOperacji, 'pass_purchase', passMetadata);
-      return;
-    }
-
-    const latestExpiryDate = updatedKarnetyList.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || nowaDataWygasnieciaStr;
-
-    const dbPayload: any = {
-      karnetyKlubowicza: updatedKarnetyList,
-      Wygasa: latestExpiryDate
-    };
-    
-    if (effectiveDiscount.isBirthday && !appliedDiscountCode) {
-      dbPayload.urodziny_rabat_rok = currentYear;
-    }
-
-    if (!isContract && !appliedDiscountCode && calculatedFirstPayment > 150) {
-      dbPayload.rabat = finalRabatInt;
-      dbPayload.cyklCiaglosci = finalCyklInt;
-      dbPayload.hasLostContinuity = false;
-    }
-
-    if (ambassadorClaimedTierToPersist) {
-      dbPayload.ambassador_claimed_tier_id = ambassadorClaimedTierToPersist;
-    }
-
-    if (isContract && contractInfo) {
-      dbPayload.umowa_oplacona_do = contractInfo.endOfFirstMonthStr;
-      const isBlockedForContract = currentUser.powodBlokady?.toLowerCase().includes('umow') || currentUser.powodBlokady?.toLowerCase().includes('umowę') || currentUser.powodBlokady?.toLowerCase().includes('wpłaty');
-      if (isBlockedForContract) {
-        dbPayload.blokadaDo = null;
-        dbPayload.powodBlokady = null;
+      if (appliedDiscountCode) {
+        await incrementCodeUsage(
+          appliedDiscountCode.id, 
+          currentUser.id, 
+          defKarnetu?.id || null, 
+          createdTransactionId
+        );
       }
-    }
 
-    const walletValToSave = (typeof currentUser.Portfel === 'number' || (currentUser.Portfel === null && typeof currentUser.portfel === 'number'))
-      ? nowyStanPortfela
-      : nowyStanPortfelaStr;
+      await checkAndEvaluateAmbassadorReferral(currentUser.id, selectedBuyPass, cenaPoRabacie);
 
-    dbPayload.Portfel = walletValToSave;
-    if ('portfel' in currentUser && currentUser.portfel !== undefined) {
-      dbPayload.portfel = (typeof currentUser.portfel === 'number' || currentUser.portfel === null) ? nowyStanPortfela : walletValToSave;
-    }
-
-    if ('Cena' in currentUser && currentUser.Cena !== undefined) {
-      dbPayload.Cena = (typeof currentUser.Cena === 'number' || currentUser.Cena === null)
-        ? cenaPoRabacie
-        : (typeof currentUser.Cena === 'string' && currentUser.Cena.includes('PLN') ? cenaStr : cenaPoRabacie);
-    } else if ('cena' in currentUser && currentUser.cena !== undefined) {
-      dbPayload.cena = (typeof currentUser.cena === 'number' || currentUser.cena === null)
-        ? cenaPoRabacie
-        : (typeof currentUser.cena === 'string' && currentUser.cena.includes('PLN') ? cenaStr : cenaPoRabacie);
-    } else {
-      dbPayload.Cena = cenaStr;
-    }
-
-    const { error: updateError } = await supabase.from('klienci').update(dbPayload).eq('id', currentUser.id);
-
-    if (updateError) {
-      showToast(`Błąd aktualizacji: ${updateError.message}`, 'error');
-      return;
-    }
-
-    let createdTransactionId: number | null = null;
-    if (cenaPoRabacie > 0) {
-      const { data: transData } = await supabase.from('transakcje').insert([{
-        klient_id: currentUser.id,
-        typ_operacji: 'zakup_karnetu',
-        kwota: -walletDeduction,
-        opis: `Zakup z portfela: ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
-        kwota_autopay: 0,
-        kwota_portfel: walletDeduction,
-        kod_rabatowy: appliedDiscountCode?.kod || null,
-        rabat_kwota: discountAmount
-      }]).select('id').maybeSingle();
-
-      if (transData?.id) createdTransactionId = transData.id;
-    } else {
-      const { data: transData } = await supabase.from('transakcje').insert([{
-        klient_id: currentUser.id,
-        typ_operacji: 'zakup_karnetu',
-        kwota: 0,
-        opis: `Aktywacja bezpłatnego karnetu: ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
-        kwota_autopay: 0,
-        kwota_portfel: 0,
-        kod_rabatowy: appliedDiscountCode?.kod || null,
-        rabat_kwota: discountAmount
-      }]).select('id').maybeSingle();
-
-      if (transData?.id) createdTransactionId = transData.id;
-    }
-
-    if (appliedDiscountCode) {
-      await incrementCodeUsage(
-        appliedDiscountCode.id, 
-        currentUser.id, 
-        defKarnetu?.id || null, 
-        createdTransactionId
+      await triggerPushNotificationToAdmin(
+        'Nowy karnet',
+        `${currentUser.firstName} ${currentUser.lastName} zakupił karnet: ${selectedBuyPass} (${cenaStr}).`
       );
+
+      setCurrentUser({
+        ...currentUser,
+        karnetyKlubowicza: updatedKarnetyList,
+        Wygasa: latestExpiryDate,
+        urodziny_rabat_rok: dbPayload.urodziny_rabat_rok !== undefined ? dbPayload.urodziny_rabat_rok : currentUser.urodziny_rabat_rok,
+        rabat: finalRabatInt,
+        cyklCiaglosci: finalCyklInt,
+        hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
+        Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
+        portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
+        wallet: nowyStanPortfelaStr,
+        umowa_oplacona_do: dbPayload.umowa_oplacona_do !== undefined ? dbPayload.umowa_oplacona_do : currentUser.umowa_oplacona_do,
+        ambassador_claimed_tier_id: dbPayload.ambassador_claimed_tier_id !== undefined ? dbPayload.ambassador_claimed_tier_id : currentUser.ambassador_claimed_tier_id,
+        ambassadorDiscountPercent: ambassadorClaimedTierToPersist ? 0 : currentUser.ambassadorDiscountPercent,
+        blokadaDo: dbPayload.blokadaDo !== undefined ? dbPayload.blokadaDo : currentUser.blokadaDo,
+        powodBlokady: dbPayload.powodBlokady !== undefined ? dbPayload.powodBlokady : currentUser.powodBlokady
+      });
+
+      showToast(
+        cenaPoRabacie === 0 
+          ? `Pomyślnie dodano bezpłatny karnet "${selectedBuyPass}" do Twojego konta!` 
+          : `Gratulacje! Aktywowano karnet ze środków portfela (${cenaStr}).`, 
+        'success'
+      );
+      setSelectedBuyPass('');
+      setPendingQuantityPassData(null);
+      setIsBuyPassModalOpen(false);
+      resetDiscountState();
+      loadData();
+    } finally {
+      isSubmittingRef.current = false;
+      setIsProcessingPayment(false);
     }
-
-    await checkAndEvaluateAmbassadorReferral(currentUser.id, selectedBuyPass, cenaPoRabacie);
-
-    await triggerPushNotificationToAdmin(
-      'Nowy karnet',
-      `${currentUser.firstName} ${currentUser.lastName} zakupił karnet: ${selectedBuyPass} (${cenaStr}).`
-    );
-
-    setCurrentUser({
-      ...currentUser,
-      karnetyKlubowicza: updatedKarnetyList,
-      Wygasa: latestExpiryDate,
-      urodziny_rabat_rok: dbPayload.urodziny_rabat_rok !== undefined ? dbPayload.urodziny_rabat_rok : currentUser.urodziny_rabat_rok,
-      rabat: finalRabatInt,
-      cyklCiaglosci: finalCyklInt,
-      hasLostContinuity: dbPayload.hasLostContinuity !== undefined ? dbPayload.hasLostContinuity : currentUser.hasLostContinuity,
-      Portfel: dbPayload.Portfel !== undefined ? dbPayload.Portfel : currentUser.Portfel,
-      portfel: dbPayload.portfel !== undefined ? dbPayload.portfel : currentUser.portfel,
-      wallet: nowyStanPortfelaStr,
-      umowa_oplacona_do: dbPayload.umowa_oplacona_do !== undefined ? dbPayload.umowa_oplacona_do : currentUser.umowa_oplacona_do,
-      ambassador_claimed_tier_id: dbPayload.ambassador_claimed_tier_id !== undefined ? dbPayload.ambassador_claimed_tier_id : currentUser.ambassador_claimed_tier_id,
-      ambassadorDiscountPercent: ambassadorClaimedTierToPersist ? 0 : currentUser.ambassadorDiscountPercent,
-      blokadaDo: dbPayload.blokadaDo !== undefined ? dbPayload.blokadaDo : currentUser.blokadaDo,
-      powodBlokady: dbPayload.powodBlokady !== undefined ? dbPayload.powodBlokady : currentUser.powodBlokady
-    });
-
-    showToast(
-      cenaPoRabacie === 0 
-        ? `Pomyślnie dodano bezpłatny karnet "${selectedBuyPass}" do Twojego konta!` 
-        : `Gratulacje! Aktywowano karnet ze środków portfela (${cenaStr}).`, 
-      'success'
-    );
-    setSelectedBuyPass('');
-    setPendingQuantityPassData(null);
-    setIsBuyPassModalOpen(false);
-    resetDiscountState();
-    loadData();
   };
 
   const getDaysBetween = (d1: string, d2: string) => {
@@ -3923,7 +3975,7 @@ export default function KarnetyPage() {
                       className={`${isBonus13Period ? 'bg-purple-700 hover:bg-purple-800' : 'bg-blue-600 hover:bg-blue-700'} disabled:opacity-50 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer`}
                     >
                       {isProcessingPayment 
-                        ? 'Łączenie...' 
+                        ? 'Przetwarzanie...' 
                         : isBonus13Period 
                         ? `AKTYWUJ BONUS +${contractInfo.totalSuspUsed} DNI (0.00 PLN)` 
                         : finalPrice === 0
@@ -4189,7 +4241,7 @@ export default function KarnetyPage() {
                       className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black px-6 py-3 rounded-xl uppercase transition-colors shadow-sm cursor-pointer"
                     >
                       {isProcessingPayment 
-                        ? 'Łączenie...' 
+                        ? 'Aktywowanie / Łączenie...' 
                         : discountedPrice === 0
                         ? 'DODAJ KARNET DO KONTA (BEZPŁATNY)'
                         : amountToPayGateway > 0 
