@@ -475,7 +475,11 @@ export async function POST(req: Request) {
           klient_id: transakcja.user_id,
           typ_operacji: 'sklep_autopay',
           kwota: transactionAmount,
-          opis: `Zakup w sklepie klubowym: Zamówienie #${targetOrderId ? String(targetOrderId).slice(0, 8) : orderID} (Autopay online, Zamówienie: ${orderID})`
+          opis: `Zakup w sklepie klubowym: Zamówienie #${targetOrderId ? String(targetOrderId).slice(0, 8) : orderID} (Autopay online, Zamówienie: ${orderID})`,
+          kwota_autopay: transactionAmount,
+          kwota_portfel: 0,
+          kod_rabatowy: metadata.kod_rabatowy || metadata.kodRabatowy || null,
+          rabat_kwota: Number(metadata.rabat_kwota || metadata.rabatKwota || 0) || 0
         }]);
 
         await sendPushToAdmins(
@@ -558,7 +562,11 @@ export async function POST(req: Request) {
           klient_id: transakcja.user_id,
           typ_operacji: 'odziez_autopay',
           kwota: transactionAmount,
-          opis: `Zamówienie odzieży klubowej: ${wariant} ${rozmiar ? `(${rozmiar})` : ''} (Autopay online, Zamówienie: ${orderID})`
+          opis: `Zamówienie odzieży klubowej: ${wariant} ${rozmiar ? `(${rozmiar})` : ''} (Autopay online, Zamówienie: ${orderID})`,
+          kwota_autopay: transactionAmount,
+          kwota_portfel: 0,
+          kod_rabatowy: metadata.kod_rabatowy || metadata.kodRabatowy || null,
+          rabat_kwota: Number(metadata.rabat_kwota || metadata.rabatKwota || 0) || 0
         }]);
 
         await sendPushToAdmins(
@@ -605,7 +613,11 @@ export async function POST(req: Request) {
               klient_id: transakcja.user_id,
               typ_operacji: 'koszulka_autopay',
               kwota: transactionAmount,
-              opis: `Opłata za koszulkę treningową: ${eventData.tytul} (Autopay online, Zamówienie: ${orderID})`
+              opis: `Opłata za koszulkę treningową: ${eventData.tytul} (Autopay online, Zamówienie: ${orderID})`,
+              kwota_autopay: transactionAmount,
+              kwota_portfel: 0,
+              kod_rabatowy: null,
+              rabat_kwota: 0
             }]);
 
             await sendPushToAdmins(
@@ -631,7 +643,11 @@ export async function POST(req: Request) {
             klient_id: transakcja.user_id,
             typ_operacji: 'redukcja_fee_autopay',
             kwota: transactionAmount,
-            opis: `Wpisowe na wyzwanie redukcji (Opłacono online Autopay, Zamówienie: ${orderID})`
+            opis: `Wpisowe na wyzwanie redukcji (Opłacono online Autopay, Zamówienie: ${orderID})`,
+            kwota_autopay: transactionAmount,
+            kwota_portfel: 0,
+            kod_rabatowy: metadata.kod_rabatowy || metadata.kodRabatowy || null,
+            rabat_kwota: Number(metadata.rabat_kwota || metadata.rabatKwota || 0) || 0
           }]);
 
           await sendPushToAdmins(
@@ -680,7 +696,7 @@ export async function POST(req: Request) {
                 isContract12M: true,
                 blokadaDo: null,
                 powodBlokady: null,
-                statusTekst: `Umowa 12M (Rata ${updatedRataDisplay} • Ważny do: ${targetPaidUntil})`
+                statusTekst: `Umowa 12M (Rata ${updatedRataDisplay} | Ważny do: ${targetPaidUntil})`
               };
             }
             return k;
@@ -697,7 +713,7 @@ export async function POST(req: Request) {
               contractSuspensionDaysLeft: 30,
               blokadaDo: null,
               powodBlokady: null,
-              statusTekst: `Umowa 12M (Rata ${updatedRataDisplay} • Ważny do: ${targetPaidUntil})`
+              statusTekst: `Umowa 12M (Rata ${updatedRataDisplay} | Ważny do: ${targetPaidUntil})`
             });
           }
 
@@ -708,6 +724,10 @@ export async function POST(req: Request) {
 
           if (metadata.ambassador_claimed_tier_id) {
             clientUpdatePayload.ambassador_claimed_tier_id = metadata.ambassador_claimed_tier_id;
+          }
+
+          if (metadata.walletDeduction && metadata.newWalletBalance) {
+            clientUpdatePayload.Portfel = metadata.newWalletBalance;
           }
 
           const isBlockedForContract = klient.powodBlokady?.toLowerCase().includes('umow') || klient.powodBlokady?.toLowerCase().includes('wpłat') || klient.powodBlokady?.toLowerCase().includes('wplat');
@@ -721,11 +741,29 @@ export async function POST(req: Request) {
             .update(clientUpdatePayload)
             .eq('id', klient.id);
 
+          // Rozbicie płatności: AutoPay, Portfel, Kod rabatowy
+          const walletDeduction = Number(metadata.walletDeduction || metadata.kwota_portfel || metadata.portfel) || 0;
+          const discountCode = metadata.kod_rabatowy || metadata.kodRabatowy || metadata.discountCode || null;
+          const discountAmount = Number(metadata.rabat_kwota || metadata.rabatKwota || metadata.discountAmount) || 0;
+          const totalPaidAmount = transactionAmount + walletDeduction;
+
+          let paymentDetailsDesc = `AutoPay: ${transactionAmount.toFixed(2)} PLN`;
+          if (walletDeduction > 0) {
+            paymentDetailsDesc += ` + Portfel: ${walletDeduction.toFixed(2)} PLN`;
+          }
+          if (discountCode) {
+            paymentDetailsDesc += ` | Kod: ${discountCode}${discountAmount > 0 ? ` (-${discountAmount.toFixed(2)} PLN)` : ''}`;
+          }
+
           await supabase.from('transakcje').insert([{
             klient_id: klient.id,
             typ_operacji: 'oplata_raty_12m_autopay',
-            kwota: transactionAmount,
-            opis: `Opłata raty umowy 12M: ${passName} (Rata ${updatedRataDisplay}, opłacono online Autopay do ${targetPaidUntil}, Zamówienie: ${orderID})`
+            kwota: totalPaidAmount > 0 ? totalPaidAmount : transactionAmount,
+            opis: `Opłata raty umowy 12M: ${passName} (Rata ${updatedRataDisplay}, opłacono online Autopay do ${targetPaidUntil}, ${paymentDetailsDesc}, Zamówienie: ${orderID})`,
+            kwota_autopay: transactionAmount,
+            kwota_portfel: walletDeduction,
+            kod_rabatowy: discountCode,
+            rabat_kwota: discountAmount
           }]);
 
           await supabase.from('booking_logs').insert([{
@@ -733,11 +771,11 @@ export async function POST(req: Request) {
             status: 'SUCCESS',
             reason: `Klubowicz ID:${klient.id} opłacił ratę umowy online Autopay do ${targetPaidUntil}. Rata: ${updatedRataDisplay}. Zdjęto blokadę ratalną.`,
             rule_applied: 'contract_autopay_settlement',
-            payload: { klient_id: klient.id, amount: transactionAmount, paid_until: targetPaidUntil, order_id: orderID, rata: updatedRataDisplay }
+            payload: { klient_id: klient.id, amount: transactionAmount, wallet_deduction: walletDeduction, paid_until: targetPaidUntil, order_id: orderID, rata: updatedRataDisplay }
           }]);
 
           // PROGRAM AMBASADOR: Ewaluacja pierwszego karnetu przy racie umowy
-          const totalEffectivePrice = transactionAmount + (Number(metadata.walletDeduction) || 0);
+          const totalEffectivePrice = transactionAmount + walletDeduction;
           await evaluateAmbassadorReferralInWebhook(klient.id, clientName, passName, totalEffectivePrice);
 
           await sendPushToAdmins(
@@ -775,14 +813,14 @@ export async function POST(req: Request) {
                   if (existingContract.contractSuspensionDaysLeft !== undefined) {
                     k.contractSuspensionDaysLeft = existingContract.contractSuspensionDaysLeft;
                   }
-                  k.statusTekst = `Umowa 12M (Rata ${rataDisplay} • Ważny do: ${k.waznyDo})`;
+                  k.statusTekst = `Umowa 12M (Rata ${rataDisplay} | Ważny do: ${k.waznyDo})`;
                   k.blokadaDo = null;
                   k.powodBlokady = null;
                 } else if (k.rata && k.rata.includes('/')) {
                   const { rataDisplay } = calculateNextRata(k.rata, 12);
                   k.rata = rataDisplay;
                   k.isContract12M = true;
-                  k.statusTekst = `Umowa 12M (Rata ${rataDisplay} • Ważny do: ${k.waznyDo})`;
+                  k.statusTekst = `Umowa 12M (Rata ${rataDisplay} | Ważny do: ${k.waznyDo})`;
                 }
               }
 
@@ -875,6 +913,20 @@ export async function POST(req: Request) {
             opDescription += ` (Przeniesiono +${metadata.transferredEntries} niewykorzystanych wejść)`;
           }
 
+          // Rozbicie płatności: AutoPay, Portfel, Kod rabatowy
+          const walletDeduction = Number(metadata.walletDeduction || metadata.kwota_portfel || metadata.portfel) || 0;
+          const discountCode = metadata.kod_rabatowy || metadata.kodRabatowy || metadata.discountCode || null;
+          const discountAmount = Number(metadata.rabat_kwota || metadata.rabatKwota || metadata.discountAmount) || 0;
+          const totalPaidAmount = transactionAmount + walletDeduction;
+
+          let paymentDetailsDesc = `AutoPay: ${transactionAmount.toFixed(2)} PLN`;
+          if (walletDeduction > 0) {
+            paymentDetailsDesc += ` + Portfel: ${walletDeduction.toFixed(2)} PLN`;
+          }
+          if (discountCode) {
+            paymentDetailsDesc += ` | Kod: ${discountCode}${discountAmount > 0 ? ` (-${discountAmount.toFixed(2)} PLN)` : ''}`;
+          }
+
           const typOp = isContractOperation
             ? (transakcja.type === 'pass_extend' ? 'oplata_raty_12m_autopay' : 'zakup_umowy_autopay')
             : (transakcja.type === 'pass_extend' ? 'przedluzenie_karnetu_autopay' : 'zakup_karnetu_autopay');
@@ -884,9 +936,12 @@ export async function POST(req: Request) {
             .insert([{
               klient_id: klient.id,
               typ_operacji: typOp,
-              kwota: transactionAmount,
-              opis: `${opDescription} (Opłacono online Autopay, Zamówienie: ${orderID})`,
-              kod_rabatowy: metadata.kod_rabatowy || null
+              kwota: totalPaidAmount > 0 ? totalPaidAmount : transactionAmount,
+              opis: `${opDescription} (${paymentDetailsDesc}, Zamówienie: ${orderID})`,
+              kwota_autopay: transactionAmount,
+              kwota_portfel: walletDeduction,
+              kod_rabatowy: discountCode,
+              rabat_kwota: discountAmount
             }])
             .select('id')
             .maybeSingle();
@@ -926,7 +981,7 @@ export async function POST(req: Request) {
           }
           if (!cleanPassName) cleanPassName = 'Karnet';
 
-          let totalPassPrice = transactionAmount + (Number(metadata.walletDeduction) || 0);
+          let totalPassPrice = transactionAmount + walletDeduction;
           if (metadata.cenaStr) {
             const parsedCena = parseFloat(String(metadata.cenaStr).replace(/[^0-9.-]/g, ''));
             if (!isNaN(parsedCena) && parsedCena > 0) {
@@ -972,7 +1027,11 @@ export async function POST(req: Request) {
             kwota: transactionAmount,
             opis: transakcja.type === 'wallet_settlement'
               ? `Spłata zadłużenia portfela (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN, Zamówienie: ${orderID})`
-              : `Doładowanie portfela klubowicza (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN, Zamówienie: ${orderID})`
+              : `Doładowanie portfela klubowicza (Opłacono online Autopay: ${transactionAmount.toFixed(2)} PLN, Zamówienie: ${orderID})`,
+            kwota_autopay: transactionAmount,
+            kwota_portfel: 0,
+            kod_rabatowy: null,
+            rabat_kwota: 0
           }]);
 
           await sendPushToAdmins(
