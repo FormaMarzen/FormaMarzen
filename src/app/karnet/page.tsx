@@ -1124,7 +1124,7 @@ export default function KarnetyPage() {
                     return {
                       ...k,
                       zeroEntriesGraceUntil: tomorrowStr,
-                      statusTekst: `Wykorzystano wejścia (wygasa ${tomorrowStr} - zachowaj ciągłość)`
+                      statusTekst: `Wykorzystano wejścia (wygasa ${tomorrowStr} | zachowaj ciągłość)`
                     };
                   }
                 }
@@ -1208,7 +1208,11 @@ export default function KarnetyPage() {
                       klient_id: c.id,
                       typ_operacji: 'auto_przedluzenie_karnetu',
                       kwota: -priceAfterDiscount,
-                      opis: `Automatyczne przedłużenie karnetu: ${primaryPass.nazwa} z powodu przyszłych rezerwacji w grafiku. Obciążono portfel kwotą ${priceAfterDiscount.toFixed(2)} PLN. Ciągłość przerwana.`
+                      opis: `Automatyczne przedłużenie karnetu: ${primaryPass.nazwa} z powodu przyszłych rezerwacji w grafiku. Obciążono portfel kwotą ${priceAfterDiscount.toFixed(2)} PLN. Ciągłość przerwana.`,
+                      kwota_autopay: 0,
+                      kwota_portfel: priceAfterDiscount,
+                      kod_rabatowy: null,
+                      rabat_kwota: 0
                     }]);
                   }
                 }
@@ -1499,7 +1503,7 @@ export default function KarnetyPage() {
             dostepnyOnline: item.sprzedaz_online !== undefined ? item.sprzedaz_online : (meta.dostepnyOnline ?? true),
             ponownyZakup: meta.ponownyZakup !== undefined ? meta.ponownyZakup : true,
             zmianaNaInny: meta.zmianaNaInny !== undefined ? meta.zmianaNaInny : true,
-            kupInnyKarnet: meta.kupInnyKarnet !== undefined ? meta.kupInnyKarnet : true,
+            kupInnyKarnet: meta.kupInnyKarnet ?? true,
             blokujPortfel: meta.blokujPortfel || false,
             portfelPrógKwota: meta.portfelPrógKwota || '0',
             wUzyciu: item.wUzyciu || 0,
@@ -1780,6 +1784,7 @@ export default function KarnetyPage() {
     const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
     const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+    const discountAmount = Math.max(0, basePriceNum - cenaPoRabacie);
     
     let updatedKarnetyList = [...karnetyList];
 
@@ -1856,9 +1861,16 @@ export default function KarnetyPage() {
         hasLostContinuity: false,
         cenaStr,
         walletDeduction,
+        kwota_portfel: walletDeduction,
+        kwota_autopay: amountToPayAutopay,
         newWalletBalance: nowyStanPortfelaStr,
         defKarnetId: defKarnetu?.id || null,
         kod_rabatowy: appliedDiscountCode?.kod || null,
+        kodRabatowy: appliedDiscountCode?.kod || null,
+        discountCode: appliedDiscountCode?.kod || null,
+        rabat_kwota: discountAmount,
+        rabatKwota: discountAmount,
+        discountAmount: discountAmount,
         appliedDiscountCodeId: appliedDiscountCode?.id || null,
         ambassador_claimed_tier_id: ambassadorClaimedTierToPersist,
         isContract,
@@ -1954,7 +1966,10 @@ export default function KarnetyPage() {
         typ_operacji: isContract ? 'oplata_raty_12m' : 'zakup_karnetu',
         kwota: -walletDeduction,
         opis: opisOperacji,
-        kod_rabatowy: appliedDiscountCode?.kod || null
+        kwota_autopay: 0,
+        kwota_portfel: walletDeduction,
+        kod_rabatowy: appliedDiscountCode?.kod || null,
+        rabat_kwota: discountAmount
       }]).select('id').maybeSingle();
 
       if (transData?.id) createdTransactionId = transData.id;
@@ -1964,7 +1979,10 @@ export default function KarnetyPage() {
         typ_operacji: 'bonus_zawieszenia_12m',
         kwota: 0,
         opis: `Aktywowano bezpłatny okres bonusowy (+${bonusDaysAmount} dni) z tytułu wykorzystanego zawieszenia dla umowy 12M: ${passToExtend.nazwa}`,
-        kod_rabatowy: null
+        kwota_autopay: 0,
+        kwota_portfel: 0,
+        kod_rabatowy: null,
+        rabat_kwota: 0
       }]);
     } else {
       const { data: transData } = await supabase.from('transakcje').insert([{
@@ -1972,7 +1990,10 @@ export default function KarnetyPage() {
         typ_operacji: 'zakup_karnetu',
         kwota: 0,
         opis: `Przedłużenie bezpłatnego karnetu: ${passToExtend.nazwa}${appliedLabel ? ` ${appliedLabel}` : ''}`,
-        kod_rabatowy: appliedDiscountCode?.kod || null
+        kwota_autopay: 0,
+        kwota_portfel: 0,
+        kod_rabatowy: appliedDiscountCode?.kod || null,
+        rabat_kwota: discountAmount
       }]).select('id').maybeSingle();
 
       if (transData?.id) createdTransactionId = transData.id;
@@ -2024,7 +2045,6 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
-
   // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2071,6 +2091,7 @@ export default function KarnetyPage() {
     const amountToPayAutopay = Math.max(0, cenaPoRabacie - walletDeduction);
     const nowyStanPortfela = Math.max(0, currentWalletNum - walletDeduction);
     const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
+    const discountAmount = Math.max(0, calculatedFirstPayment - cenaPoRabacie);
 
     const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
     let nowaDataWygasnieciaStr = '';
@@ -2091,6 +2112,7 @@ export default function KarnetyPage() {
       return true;
     });
 
+    let leftoverTransferredCount = 0;
     if (isContract) {
       nowaDataWygasnieciaStr = contractInfo.endOfFirstMonthStr;
       statusTekst = `Umowa 12M (Rata 0/12 - wyrównanie do końca m-ca: ${contractInfo.remainingDays}/${contractInfo.totalDaysInMonth} dni)`;
@@ -2123,6 +2145,7 @@ export default function KarnetyPage() {
       let leftoverTransferred = 0;
       if (existingQuantityPass) {
         leftoverTransferred = Math.max(0, existingQuantityPass.pozostaloWejsc || 0);
+        leftoverTransferredCount = leftoverTransferred;
         updatedKarnetyList = updatedKarnetyList.filter(k => k.id !== existingQuantityPass.id);
       }
 
@@ -2220,12 +2243,20 @@ export default function KarnetyPage() {
         hasLostContinuity: false,
         cenaStr,
         walletDeduction,
+        kwota_portfel: walletDeduction,
+        kwota_autopay: amountToPayAutopay,
         newWalletBalance: nowyStanPortfelaStr,
         defKarnetId: defKarnetu?.id || null,
         kod_rabatowy: appliedDiscountCode?.kod || null,
+        kodRabatowy: appliedDiscountCode?.kod || null,
+        discountCode: appliedDiscountCode?.kod || null,
+        rabat_kwota: discountAmount,
+        rabatKwota: discountAmount,
+        discountAmount: discountAmount,
         appliedDiscountCodeId: appliedDiscountCode?.id || null,
         umowa_oplacona_do: isContract && contractInfo ? contractInfo.endOfFirstMonthStr : null,
-        ambassador_claimed_tier_id: ambassadorClaimedTierToPersist
+        ambassador_claimed_tier_id: ambassadorClaimedTierToPersist,
+        transferredEntries: leftoverTransferredCount
       };
 
       setIsBuyPassModalOpen(false);
@@ -2300,7 +2331,10 @@ export default function KarnetyPage() {
         typ_operacji: 'zakup_karnetu',
         kwota: -walletDeduction,
         opis: `Zakup z portfela: ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
-        kod_rabatowy: appliedDiscountCode?.kod || null
+        kwota_autopay: 0,
+        kwota_portfel: walletDeduction,
+        kod_rabatowy: appliedDiscountCode?.kod || null,
+        rabat_kwota: discountAmount
       }]).select('id').maybeSingle();
 
       if (transData?.id) createdTransactionId = transData.id;
@@ -2310,7 +2344,10 @@ export default function KarnetyPage() {
         typ_operacji: 'zakup_karnetu',
         kwota: 0,
         opis: `Aktywacja bezpłatnego karnetu: ${selectedBuyPass}${appliedLabel ? ` ${appliedLabel}` : ''}`,
-        kod_rabatowy: appliedDiscountCode?.kod || null
+        kwota_autopay: 0,
+        kwota_portfel: 0,
+        kod_rabatowy: appliedDiscountCode?.kod || null,
+        rabat_kwota: discountAmount
       }]).select('id').maybeSingle();
 
       if (transData?.id) createdTransactionId = transData.id;
@@ -2362,6 +2399,7 @@ export default function KarnetyPage() {
     resetDiscountState();
     loadData();
   };
+
   const getDaysBetween = (d1: string, d2: string) => {
     const date1 = new Date(d1);
     const date2 = new Date(d2);
@@ -3176,7 +3214,6 @@ export default function KarnetyPage() {
                     if (karnet.pozostaloWejsc <= 2) isExpiring = true;
                   }
                 }
-
                 let statusColorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200'; 
                 if (isLatePaymentBlocked) statusColorClass = 'bg-rose-100 text-rose-800 border-rose-300';
                 else if (isSuspendedLocal) statusColorClass = 'bg-slate-100 text-slate-600 border-slate-300'; 
@@ -3395,11 +3432,11 @@ export default function KarnetyPage() {
                   <table className="w-full text-left border-collapse min-w-max text-xs">
                     <thead>
                       <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                        <th className="py-3 px-4">Data Operacji</th>
-                        <th className="py-3 px-4">Karnet</th>
-                        <th className="py-3 px-4">Okres zawieszenia</th>
-                        <th className="py-3 px-4 text-center">Zużyte dni</th>
-                        <th className="py-3 px-4 text-right">Status</th>
+                        <th className="py-3.5 px-4">Data Operacji</th>
+                        <th className="py-3.5 px-4">Karnet</th>
+                        <th className="py-3.5 px-4">Okres zawieszenia</th>
+                        <th className="py-3.5 px-4 text-center">Zużyte dni</th>
+                        <th className="py-3.5 px-4 text-right">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -4193,6 +4230,7 @@ export default function KarnetyPage() {
       </div>
     );
   }
+
   // PANEL ADMINISTRATORA / TRENERA
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased relative">
@@ -4720,10 +4758,10 @@ export default function KarnetyPage() {
                   <label className="font-bold text-slate-800 block">Opis</label>
                   <textarea 
                     rows={3} 
-                    placeholder="Opis karnetu..."
-                    value={opis}
-                    onChange={(e) => setOpis(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl p-3 text-slate-800 focus:outline-none focus:border-sky-500 font-medium"
+                    placeholder="Opis karnetu..." 
+                    value={opis} 
+                    onChange={(e) => setOpis(e.target.value)} 
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl p-3 text-slate-800 focus:outline-none focus:border-sky-500 font-medium" 
                   />
                 </div>
               </div>
