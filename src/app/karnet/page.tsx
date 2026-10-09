@@ -922,11 +922,8 @@ export default function KarnetyPage() {
     };
   };
 
+  // NAPRAWIONA FUNKCJA PRZEKIEROWANIA DO AUTOPAY (USUNIĘTO BLOKADĘ DEADLOCKA)
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string, metadata: any) => {
-    if (isSubmittingRef.current) return;
-    isSubmittingRef.current = true;
-    setIsProcessingPayment(true);
-
     try {
       const response = await fetch('/api/autopay/init', {
         method: 'POST',
@@ -3309,8 +3306,8 @@ export default function KarnetyPage() {
                                 : contractInfo.canActivateBonus
                                 ? 'bg-purple-100 text-purple-900 border-purple-300'
                                 : isBonus13thActive 
-                                ? 'bg-purple-100 text-purple-900 border-purple-300' 
-                                : 'bg-amber-500/20 text-amber-900 border-amber-300'
+                                ? 'Umowa 12M • Dni bonusowe' 
+                                : `Umowa 12M • Rata ${karnet.rata || '0/12'}`}
                             }`}>
                               {isLatePaymentBlocked
                                 ? '⚠️ Brak wpłaty za bieżący miesiąc'
@@ -3809,7 +3806,7 @@ export default function KarnetyPage() {
           
           let basePrice = 0;
           if (isContract && passToExtend.cena) {
-            basePrice = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]+/g, "")) || 0;
+            basePrice = parseFloat(String(passToExtend.cena).replace(/[^0-9.-]/g, "")) || 0;
           } else if (defKarnetu) {
             basePrice = parseFloat(defKarnetu.cena) || 0;
           } else {
@@ -3829,7 +3826,7 @@ export default function KarnetyPage() {
           const nextRataNum = Math.min(maxRataVal, contractInfo.rataNum + 1);
           const nextRataStr = `${nextRataNum} / ${maxRataVal}`;
 
-          const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
+          const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]/g, "")) || 0);
           const walletDeduction = (!isBonus13Period && useWalletFunds && finalPrice > 0) ? Math.min(currentWalletNum, finalPrice) : 0;
           const amountToPayGateway = Math.max(0, finalPrice - walletDeduction);
 
@@ -4029,7 +4026,7 @@ export default function KarnetyPage() {
           const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, calculatedFirstPayment, selectedBuyPass);
           const { finalPrice: discountedPrice, appliedLabel } = calculateFinalPrice(calculatedFirstPayment, effectiveDiscount, appliedDiscountCode);
 
-          const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]+/g, "")) || 0);
+          const currentWalletNum = Math.max(0, parseFloat((currentUser.Portfel || currentUser.portfel || currentUser.wallet || '0').replace(/[^0-9.-]/g, "")) || 0);
           const walletDeduction = (useWalletFunds && discountedPrice > 0) ? Math.min(currentWalletNum, discountedPrice) : 0;
           const amountToPayGateway = Math.max(0, discountedPrice - walletDeduction);
 
@@ -4493,7 +4490,7 @@ export default function KarnetyPage() {
                       placeholder="np. 8%, 23%, ZW"
                       value={stawkaVat}
                       onChange={(e) => setStawkaVat(e.target.value)}
-                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
+                      className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500 font-bold"
                     />
                   </div>
                 </div>
@@ -4503,7 +4500,7 @@ export default function KarnetyPage() {
                   <select 
                     value={typKarnetu}
                     onChange={(e) => setTypKarnetu(e.target.value)}
-                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 text-slate-800 focus:outline-none focus:border-sky-500 font-bold cursor-pointer"
+                    className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2 text-slate-800 focus:outline-none focus:border-sky-500 font-bold cursor-pointer"
                   >
                     <option value="Na czas">Na czas</option>
                     <option value="Na ilość treningów">Na ilość treningów</option>
@@ -4655,7 +4652,7 @@ export default function KarnetyPage() {
                           Ile dni przed rozpoczęciem zajęć, klubowicz może się na nie zapisać
                         </div>
                         <div className="space-y-1">
-                          <label className="font-bold text-slate-700 block text-[10px] uppercase">Liczba dni *</label>
+                          <label className="font-bold text-slate-700 block text-[10px]">Liczba dni *</label>
                           <input 
                             type="number"
                             min="0"
