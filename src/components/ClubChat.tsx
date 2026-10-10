@@ -18,7 +18,7 @@ const DEFAULT_GROUP_CATEGORIES = [
   "Wyzwania",
 ];
 
-// Nowoczesna ikona SVG dla galerii zdjęć/mediów
+// Ikona SVG dla galerii zdjęć/mediów
 const ImageIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
@@ -36,7 +36,7 @@ const ImageIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   </svg>
 );
 
-// Funkcja kompresji zdjęć w przeglądarce przed wysłaniem (drastyczne przyspieszenie uploadu)
+// Funkcja kompresji zdjęć w przeglądarce przed wysłaniem (błyskawiczny upload)
 const compressImageFile = async (file: File): Promise<File> => {
   if (!file.type.startsWith("image/") || file.type === "image/gif") {
     return file;
@@ -174,11 +174,12 @@ export default function ClubChat() {
 
   const [newMessage, setNewMessage] = useState("");
 
-  // Inteligentny scroll i przycisk powrotu na dół (brak przeskakiwania)
+  // Płynny scroll i referencje zapobiegające przeskakiwaniu
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
-  const hasScrolledChatRef = useRef<boolean>(false);
+  const hasPositionedChatForIdRef = useRef<string | null>(null);
+  const isUserTouchingRef = useRef<boolean>(false);
 
   // Wskaźnik pisania na żywo (Typing Indicator)
   const [typingUsers, setTypingUsers] = useState<{ [key: string]: { name: string; timestamp: number } }>({});
@@ -224,10 +225,9 @@ export default function ClubChat() {
   const elementStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const hasMovedRef = useRef<boolean>(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Płynne przewijanie wyłącznie kontenera wiadomości bez przeskakiwania okna
+  // Płynne przewijanie do samego dołu wyłącznie kontenera wiadomości (bez szarpania ekranu)
   const scrollToBottom = (smooth = true) => {
     const container = messagesScrollRef.current;
     if (!container) return;
@@ -240,60 +240,27 @@ export default function ClubChat() {
     setShowScrollBottomBtn(false);
   };
 
-  // Przewijanie do konkretnej wiadomości z podświetleniem (nawigacja cytatów)
+  // Przewijanie do konkretnej wiadomości wewnątrz kontenera z podświetleniem (bez scrollIntoView)
   const scrollToMessage = (msgId: string | number) => {
+    const container = messagesScrollRef.current;
     const el = document.getElementById(`msg-bubble-${msgId}`);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (container && el) {
+      const topPos = el.offsetTop - 70;
+      container.scrollTo({ top: Math.max(0, topPos), behavior: "smooth" });
       setHighlightedMessageId(msgId);
       setTimeout(() => setHighlightedMessageId(null), 2500);
     }
   };
 
-  // Monitorowanie przewijania użytkownika bez wywoływania niepotrzebnych re-renderów
+  // Monitorowanie przewijania użytkownika z optymalizacją re-renderów
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
     const distanceToBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-    const isBottom = distanceToBottom < 60;
+    const isBottom = distanceToBottom < 75;
     isNearBottomRef.current = isBottom;
-    const shouldShow = !isBottom && target.scrollHeight > target.clientHeight + 80;
+    const shouldShow = !isBottom && target.scrollHeight > target.clientHeight + 100;
     setShowScrollBottomBtn((prev) => (prev !== shouldShow ? shouldShow : prev));
   };
-
-  // Stabilne pozycjonowanie startowe (wywoływane tylko raz przy otwarciu wątku)
-  useEffect(() => {
-    if (!isOpen || (!selectedUser && !selectedGroup)) {
-      hasScrolledChatRef.current = false;
-      return;
-    }
-    const list = selectedGroup ? groupMessages : messages;
-    if (list.length === 0) return;
-
-    if (!hasScrolledChatRef.current) {
-      const myIds = [
-        currentUserId ? String(currentUserId) : "",
-        secondaryUserId ? String(secondaryUserId) : "",
-        isAdmin ? String(SYSTEM_ID) : "",
-        isAdmin ? "999999999" : "",
-      ].filter(Boolean);
-
-      const firstUnread = list.find(
-        (m: any) => !m.przeczytana && !myIds.includes(String(m.nadawca_id))
-      );
-      if (firstUnread) {
-        const targetEl = document.getElementById(`msg-bubble-${firstUnread.id}`);
-        if (targetEl) {
-          targetEl.scrollIntoView({ behavior: "auto", block: "center" });
-          hasScrolledChatRef.current = true;
-          return;
-        }
-      }
-      if (messagesScrollRef.current) {
-        messagesScrollRef.current.scrollTop = messagesScrollRef.current.scrollHeight;
-        hasScrolledChatRef.current = true;
-      }
-    }
-  }, [isOpen, selectedUser?.id, selectedGroup?.id, groupMessages.length, messages.length]);
 
   const getGroupMembersCount = (group: any): number => {
     if (!group) return 0;
@@ -472,7 +439,7 @@ export default function ClubChat() {
     setTypingUsers({});
     setSelectedFiles([]);
     setFilePreviews([]);
-    hasScrolledChatRef.current = false;
+    hasPositionedChatForIdRef.current = null;
   };
 
   const handleCloseChat = () => {
@@ -492,7 +459,7 @@ export default function ClubChat() {
     setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
-    hasScrolledChatRef.current = false;
+    hasPositionedChatForIdRef.current = null;
   };
 
   const handleMoveCategory = (index: number, direction: "up" | "down") => {
@@ -698,7 +665,7 @@ export default function ClubChat() {
         setSelectedUser(null);
         setSelectedGroup(null);
         setChatInsideTab("messages");
-        hasScrolledChatRef.current = false;
+        hasPositionedChatForIdRef.current = null;
         setIsOpen(true);
       }
     }
@@ -1157,7 +1124,7 @@ export default function ClubChat() {
     }
   };
 
-  // ZAMYKANIE MENU REAKCJI KLIKNIĘCIEM W DOWOLNYM INNYM PUNKCIE
+  // ZAMYKANIE MENU REAKCJI KLIKNIĘCIEM W DOWOLNYM INNYM MIEJSCU
   useEffect(() => {
     if (!activeMessageMenuId) return;
     const handleGlobalClick = (e: MouseEvent) => {
@@ -1245,8 +1212,8 @@ export default function ClubChat() {
               });
             }
 
-            // Przewijamy tylko wtedy, gdy użytkownik był już na samym dole (nie przerywamy czytania)
-            if (isNearBottomRef.current) {
+            // Przewijanie tylko wtedy, gdy użytkownik znajduje się na samym dole i nie dotyka ekranu
+            if (isNearBottomRef.current && !isUserTouchingRef.current) {
               setTimeout(() => scrollToBottom(true), 80);
             }
           } else if (payload.eventType === "UPDATE") {
@@ -1338,14 +1305,14 @@ export default function ClubChat() {
 
   useEffect(() => {
     if (selectedGroup?.id) {
-      hasScrolledChatRef.current = false;
+      hasPositionedChatForIdRef.current = null;
       fetchGroupMessages(selectedGroup.id);
     }
   }, [selectedGroup?.id]);
 
   useEffect(() => {
     if (selectedUser?.id) {
-      hasScrolledChatRef.current = false;
+      hasPositionedChatForIdRef.current = null;
       fetchDirectMessages(selectedUser);
     }
   }, [selectedUser?.id]);
@@ -1387,7 +1354,7 @@ export default function ClubChat() {
           ADMIN_EMAILS.includes(selectedUser.email) ||
           selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
-        // 1. Natychmiastowe lokalne zerowanie plakietki
+        // 1. Natychmiastowe optymistyczne zerowanie plakietki
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -1413,7 +1380,7 @@ export default function ClubChat() {
           })
         );
 
-        // 2. Aktualizacja w bazie Supabase
+        // 2. Zapis w bazie Supabase
         try {
           if (isSys) {
             await supabase
@@ -4331,11 +4298,21 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* LISTA WIADOMOŚCI Z PŁYNNYM SCROLLEM BEZ PRZESKAKIWANIA OKNA */}
+              {/* LISTA WIADOMOŚCI Z PŁYNNYM SCROLLEM BEZ PRZESKAKIWANIA I BLOKOWANIA */}
               <div
                 ref={messagesScrollRef}
                 onScroll={handleScroll}
-                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full pb-6"
+                onTouchStart={() => {
+                  isUserTouchingRef.current = true;
+                }}
+                onTouchEnd={() => {
+                  isUserTouchingRef.current = false;
+                }}
+                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full pb-14"
+                style={{
+                  WebkitOverflowScrolling: "touch",
+                  overscrollBehaviorY: "contain",
+                }}
               >
                 {(() => {
                   const currentList = selectedGroup ? groupMessages : activeChatMessages;
@@ -4441,7 +4418,7 @@ export default function ClubChat() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* PŁYWAJĄCY PRZYCISK ZE STRZAŁKĄ DO SZYBKIEGO POWROTU NA SAM DÓŁ */}
+              {/* PŁYWAJĄCY PRZYCISK ZE STRZAŁKĄ DO SZYBKIEGO POWROTU NA DÓŁ */}
               {showScrollBottomBtn && (
                 <button
                   type="button"
@@ -5239,7 +5216,7 @@ export default function ClubChat() {
         </div>
       )}
 
-      {/* PRZYCISK OTWARCIA CZATU (DYMEK) – UKRYWANY PO OTWARCIU CZATU, ABY NIE ZASŁANIAŁ EKRANU */}
+      {/* PRZYCISK OTWARCIA CZATU (DYMEK) – WIDOCZNY WYŁĄCZNIE GDY CZAT JEST ZAMKNIĘTY */}
       {!isOpen && (
         <button
           type="button"
