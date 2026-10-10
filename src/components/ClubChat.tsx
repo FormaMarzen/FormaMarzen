@@ -178,7 +178,7 @@ export default function ClubChat() {
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
-  const hasInitialScrolledChatIdRef = useRef<string | null>(null);
+  const hasScrolledToBottomChatIdRef = useRef<string | null>(null);
   const isUserTouchingRef = useRef<boolean>(false);
 
   // Wskaźnik pisania na żywo (Typing Indicator)
@@ -227,7 +227,7 @@ export default function ClubChat() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Płynne przewijanie do samego dołu wyłącznie kontenera wiadomości
+  // Płynne przewijanie do samego dołu wyłącznie kontenera wiadomości (bez szarpania ekranu)
   const scrollToBottom = (smooth = true) => {
     const container = messagesScrollRef.current;
     if (!container) return;
@@ -240,7 +240,7 @@ export default function ClubChat() {
     setShowScrollBottomBtn(false);
   };
 
-  // Przewijanie do cytowanej wiadomości wewnątrz kontenera (bez psującego widok scrollIntoView)
+  // Przewijanie do cytowanej wiadomości wewnątrz kontenera (bez scrollIntoView)
   const scrollToMessage = (msgId: string | number) => {
     const container = messagesScrollRef.current;
     const el = document.getElementById(`msg-bubble-${msgId}`);
@@ -262,20 +262,20 @@ export default function ClubChat() {
     setShowScrollBottomBtn((prev) => (prev !== shouldShow ? shouldShow : prev));
   };
 
-  // Jednorazowe przejście na sam dół przy otwarciu wątku (bez skakania i bez szukania nieprzeczytanych)
+  // Jednorazowe lądowanie na samym dole przy otwarciu wątku (WhatsApp/Messenger standard)
   useEffect(() => {
     if (!isOpen || (!selectedUser && !selectedGroup)) {
-      hasInitialScrolledChatIdRef.current = null;
+      hasScrolledToBottomChatIdRef.current = null;
       return;
     }
     const currentChatId = selectedGroup ? `g_${selectedGroup.id}` : selectedUser ? `u_${selectedUser.id}` : null;
     if (!currentChatId) return;
 
-    if (hasInitialScrolledChatIdRef.current !== currentChatId) {
+    if (hasScrolledToBottomChatIdRef.current !== currentChatId) {
       const container = messagesScrollRef.current;
       if (container && (groupMessages.length > 0 || messages.length > 0)) {
         container.scrollTop = container.scrollHeight;
-        hasInitialScrolledChatIdRef.current = currentChatId;
+        hasScrolledToBottomChatIdRef.current = currentChatId;
         isNearBottomRef.current = true;
       }
     }
@@ -458,7 +458,7 @@ export default function ClubChat() {
     setTypingUsers({});
     setSelectedFiles([]);
     setFilePreviews([]);
-    hasInitialScrolledChatIdRef.current = null;
+    hasScrolledToBottomChatIdRef.current = null;
   };
 
   const handleCloseChat = () => {
@@ -478,7 +478,7 @@ export default function ClubChat() {
     setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
-    hasInitialScrolledChatIdRef.current = null;
+    hasScrolledToBottomChatIdRef.current = null;
   };
 
   const handleMoveCategory = (index: number, direction: "up" | "down") => {
@@ -684,7 +684,7 @@ export default function ClubChat() {
         setSelectedUser(null);
         setSelectedGroup(null);
         setChatInsideTab("messages");
-        hasInitialScrolledChatIdRef.current = null;
+        hasScrolledToBottomChatIdRef.current = null;
         setIsOpen(true);
       }
     }
@@ -1231,7 +1231,7 @@ export default function ClubChat() {
               });
             }
 
-            // Przewijanie wyłącznie wtedy, gdy użytkownik jest na dole i nie przewija palcem
+            // Przewijanie wyłącznie wtedy, gdy użytkownik jest na dole i nie dotyka ekranu
             if (isNearBottomRef.current && !isUserTouchingRef.current) {
               setTimeout(() => scrollToBottom(true), 80);
             }
@@ -1324,14 +1324,14 @@ export default function ClubChat() {
 
   useEffect(() => {
     if (selectedGroup?.id) {
-      hasInitialScrolledChatIdRef.current = null;
+      hasScrolledToBottomChatIdRef.current = null;
       fetchGroupMessages(selectedGroup.id);
     }
   }, [selectedGroup?.id]);
 
   useEffect(() => {
     if (selectedUser?.id) {
-      hasInitialScrolledChatIdRef.current = null;
+      hasScrolledToBottomChatIdRef.current = null;
       fetchDirectMessages(selectedUser);
     }
   }, [selectedUser?.id]);
@@ -2299,7 +2299,11 @@ export default function ClubChat() {
 
     let rawMembers = selectedGroup.czlonkowie_ids;
     if (typeof rawMembers === "string") {
-      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+      try {
+        rawMembers = JSON.parse(rawMembers);
+      } catch {
+        rawMembers = [];
+      }
     }
     groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
   }
