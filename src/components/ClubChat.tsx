@@ -181,6 +181,10 @@ export default function ClubChat() {
   const hasScrolledToBottomChatIdRef = useRef<string | null>(null);
   const isUserTouchingRef = useRef<boolean>(false);
 
+  // Zapobieganie niepotrzebnym re-renderom przy identycznych danych z pollingu
+  const lastGroupMsgSignatureRef = useRef<string>("");
+  const lastDirectMsgSignatureRef = useRef<string>("");
+
   // Wskaźnik pisania na żywo (Typing Indicator)
   const [typingUsers, setTypingUsers] = useState<{ [key: string]: { name: string; timestamp: number } }>({});
   const typingTimeoutRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
@@ -227,7 +231,7 @@ export default function ClubChat() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Płynne przewijanie do samego dołu wyłącznie kontenera wiadomości (bez szarpania ekranu)
+  // Płynne przewijanie do samego dołu wyłącznie kontenera wiadomości
   const scrollToBottom = (smooth = true) => {
     const container = messagesScrollRef.current;
     if (!container) return;
@@ -240,7 +244,7 @@ export default function ClubChat() {
     setShowScrollBottomBtn(false);
   };
 
-  // Przewijanie do cytowanej wiadomości wewnątrz kontenera (bez scrollIntoView)
+  // Przewijanie do cytowanej wiadomości wewnątrz kontenera (bez psującego widok scrollIntoView)
   const scrollToMessage = (msgId: string | number) => {
     const container = messagesScrollRef.current;
     const el = document.getElementById(`msg-bubble-${msgId}`);
@@ -262,7 +266,7 @@ export default function ClubChat() {
     setShowScrollBottomBtn((prev) => (prev !== shouldShow ? shouldShow : prev));
   };
 
-  // Jednorazowe lądowanie na samym dole przy otwarciu wątku (WhatsApp/Messenger standard)
+  // Jednorazowe lądowanie na samym dole przy otwarciu wątku (bez skakania i bez szukania nieprzeczytanych)
   useEffect(() => {
     if (!isOpen || (!selectedUser && !selectedGroup)) {
       hasScrolledToBottomChatIdRef.current = null;
@@ -274,6 +278,7 @@ export default function ClubChat() {
     if (hasScrolledToBottomChatIdRef.current !== currentChatId) {
       const container = messagesScrollRef.current;
       if (container && (groupMessages.length > 0 || messages.length > 0)) {
+        // Natychmiastowe ustawienie pozycji bez animacji na starcie
         container.scrollTop = container.scrollHeight;
         hasScrolledToBottomChatIdRef.current = currentChatId;
         isNearBottomRef.current = true;
@@ -1040,6 +1045,15 @@ export default function ClubChat() {
         .limit(2000);
 
       if (!error && data) {
+        // Obliczenie sygnatury danych w celu uniknięcia nadpisywania stanu przy braku zmian
+        const signature = data.length > 0
+          ? `${data.length}_${data[0].id}_${data[0].przeczytana ? "1" : "0"}_${data.reduce((acc, m) => acc + (m.reakcje ? Object.keys(m.reakcje).length : 0), 0)}`
+          : "empty";
+
+        if (lastGroupMsgSignatureRef.current === signature) {
+          return;
+        }
+        lastGroupMsgSignatureRef.current = signature;
         setGroupMessages([...data].reverse());
       }
     } catch (err) {
@@ -1087,6 +1101,15 @@ export default function ClubChat() {
 
       const { data, error } = await query;
       if (!error && data) {
+        const signature = data.length > 0
+          ? `${data.length}_${data[0].id}_${data[0].przeczytana ? "1" : "0"}_${data.reduce((acc, m) => acc + (m.reakcje ? Object.keys(m.reakcje).length : 0), 0)}`
+          : "empty";
+
+        if (lastDirectMsgSignatureRef.current === signature) {
+          return;
+        }
+        lastDirectMsgSignatureRef.current = signature;
+
         setMessages((prev) => {
           const map = new Map();
           prev.forEach((m) => map.set(m.id, m));
@@ -1231,7 +1254,7 @@ export default function ClubChat() {
               });
             }
 
-            // Przewijanie wyłącznie wtedy, gdy użytkownik jest na dole i nie dotyka ekranu
+            // Przewijanie wyłącznie wtedy, gdy użytkownik jest już na samym dole i nie dotyka ekranu
             if (isNearBottomRef.current && !isUserTouchingRef.current) {
               setTimeout(() => scrollToBottom(true), 80);
             }
@@ -1325,6 +1348,7 @@ export default function ClubChat() {
   useEffect(() => {
     if (selectedGroup?.id) {
       hasScrolledToBottomChatIdRef.current = null;
+      lastGroupMsgSignatureRef.current = "";
       fetchGroupMessages(selectedGroup.id);
     }
   }, [selectedGroup?.id]);
@@ -1332,6 +1356,7 @@ export default function ClubChat() {
   useEffect(() => {
     if (selectedUser?.id) {
       hasScrolledToBottomChatIdRef.current = null;
+      lastDirectMsgSignatureRef.current = "";
       fetchDirectMessages(selectedUser);
     }
   }, [selectedUser?.id]);
@@ -1373,7 +1398,7 @@ export default function ClubChat() {
           ADMIN_EMAILS.includes(selectedUser.email) ||
           selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
-        // 1. Optymistyczne zerowanie plakietki
+        // Optymistyczne zerowanie w interfejsie
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -1399,7 +1424,7 @@ export default function ClubChat() {
           })
         );
 
-        // 2. Zapis w bazie Supabase
+        // Zapis w bazie Supabase
         try {
           if (isSys) {
             await supabase
@@ -2299,11 +2324,7 @@ export default function ClubChat() {
 
     let rawMembers = selectedGroup.czlonkowie_ids;
     if (typeof rawMembers === "string") {
-      try {
-        rawMembers = JSON.parse(rawMembers);
-      } catch {
-        rawMembers = [];
-      }
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
     }
     groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
   }
@@ -2539,7 +2560,7 @@ export default function ClubChat() {
     return `Aktywny ${diffDays} dni temu`;
   };
 
-  // RENDEROWANIE ZAŁĄCZNIKÓW (OBSŁUGUJE MULTI-UPLOAD ORAZ POJEDYNCZE PLIKI)
+  // RENDEROWANIE ZAŁĄCZNIKÓW Z BLOKADĄ LAYOUT SHIFT (ZAPOBIEGA SKAKANIU EKRANU W SAFARI)
   const renderAttachment = (msg: any) => {
     if (!msg.attachment_url) return null;
 
@@ -2562,13 +2583,12 @@ export default function ClubChat() {
                 e.stopPropagation();
                 setFullscreenImage(url);
               }}
-              className="relative aspect-square overflow-hidden bg-slate-900/40 rounded-xl group cursor-pointer border border-slate-700/30"
+              className="relative aspect-square overflow-hidden bg-slate-900/30 rounded-xl group cursor-pointer border border-slate-700/30"
             >
               <img
                 src={url}
                 alt={`Zdjęcie ${index + 1}`}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                loading="lazy"
               />
             </button>
           ))}
@@ -2576,7 +2596,7 @@ export default function ClubChat() {
       );
     }
 
-    // Pojedyncze zdjęcie
+    // Pojedyncze zdjęcie z zarezerwowaną wysokością minimalną (zapobiega zerowej wysokości przed pobraniem)
     if (msg.attachment_type === "image") {
       return (
         <button
@@ -2585,13 +2605,12 @@ export default function ClubChat() {
             e.stopPropagation();
             setFullscreenImage(msg.attachment_url);
           }}
-          className="block mt-2 rounded-2xl overflow-hidden border border-slate-700/30 text-left cursor-pointer group max-w-full"
+          className="block mt-2 rounded-2xl overflow-hidden border border-slate-700/30 text-left cursor-pointer group max-w-full bg-slate-900/20 min-h-[140px]"
         >
           <img
             src={msg.attachment_url}
             alt="Załącznik"
-            className="max-h-64 w-full object-cover group-hover:scale-105 transition-transform"
-            loading="lazy"
+            className="max-h-72 w-full object-cover group-hover:scale-105 transition-transform"
           />
         </button>
       );
@@ -4120,7 +4139,6 @@ export default function ClubChat() {
                             src={imgMsg.attachment_url}
                             alt={imgMsg.attachment_name || "Zdjęcie"}
                             className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-200"
-                            loading="lazy"
                           />
                           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1 text-[9px] text-white flex justify-between items-end opacity-90">
                             <span className="truncate max-w-[60px] font-medium">{imgMsg.nadawca_nazwa?.split(" ")[0]}</span>
@@ -4321,7 +4339,7 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* LISTA WIADOMOŚCI Z PŁYNNYM SCROLLEM BEZ PRZESKAKIWANIA I BEZ ZATRZYMYWANIA NA NIEPRZECZYTANYCH */}
+              {/* LISTA WIADOMOŚCI Z BLOKADĄ SCROLL ANCHORING I ZAPASEM DOLNYM */}
               <div
                 ref={messagesScrollRef}
                 onScroll={handleScroll}
@@ -4331,10 +4349,11 @@ export default function ClubChat() {
                 onTouchEnd={() => {
                   isUserTouchingRef.current = false;
                 }}
-                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full pb-16"
+                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full pb-16 [overflow-anchor:none]"
                 style={{
                   WebkitOverflowScrolling: "touch",
                   overscrollBehaviorY: "contain",
+                  overflowAnchor: "none",
                 }}
               >
                 {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
