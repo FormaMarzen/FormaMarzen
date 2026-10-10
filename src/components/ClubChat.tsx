@@ -174,11 +174,11 @@ export default function ClubChat() {
 
   const [newMessage, setNewMessage] = useState("");
 
-  // Płynny scroll i referencje zapobiegające przeskakiwaniu
+  // Płynny scroll bez skakania i blokad
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
-  const hasPositionedChatForIdRef = useRef<string | null>(null);
+  const hasInitialScrolledChatIdRef = useRef<string | null>(null);
   const isUserTouchingRef = useRef<boolean>(false);
 
   // Wskaźnik pisania na żywo (Typing Indicator)
@@ -227,7 +227,7 @@ export default function ClubChat() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Płynne przewijanie do samego dołu wyłącznie kontenera wiadomości (bez szarpania ekranu)
+  // Płynne przewijanie do samego dołu wyłącznie kontenera wiadomości
   const scrollToBottom = (smooth = true) => {
     const container = messagesScrollRef.current;
     if (!container) return;
@@ -240,7 +240,7 @@ export default function ClubChat() {
     setShowScrollBottomBtn(false);
   };
 
-  // Przewijanie do konkretnej wiadomości wewnątrz kontenera z podświetleniem (bez scrollIntoView)
+  // Przewijanie do cytowanej wiadomości wewnątrz kontenera (bez psującego widok scrollIntoView)
   const scrollToMessage = (msgId: string | number) => {
     const container = messagesScrollRef.current;
     const el = document.getElementById(`msg-bubble-${msgId}`);
@@ -252,15 +252,34 @@ export default function ClubChat() {
     }
   };
 
-  // Monitorowanie przewijania użytkownika z optymalizacją re-renderów
+  // Śledzenie przewijania użytkownika z optymalizacją pod iOS
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
     const distanceToBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-    const isBottom = distanceToBottom < 75;
+    const isBottom = distanceToBottom < 80;
     isNearBottomRef.current = isBottom;
     const shouldShow = !isBottom && target.scrollHeight > target.clientHeight + 100;
     setShowScrollBottomBtn((prev) => (prev !== shouldShow ? shouldShow : prev));
   };
+
+  // Jednorazowe przejście na sam dół przy otwarciu wątku (bez skakania i bez szukania nieprzeczytanych)
+  useEffect(() => {
+    if (!isOpen || (!selectedUser && !selectedGroup)) {
+      hasInitialScrolledChatIdRef.current = null;
+      return;
+    }
+    const currentChatId = selectedGroup ? `g_${selectedGroup.id}` : selectedUser ? `u_${selectedUser.id}` : null;
+    if (!currentChatId) return;
+
+    if (hasInitialScrolledChatIdRef.current !== currentChatId) {
+      const container = messagesScrollRef.current;
+      if (container && (groupMessages.length > 0 || messages.length > 0)) {
+        container.scrollTop = container.scrollHeight;
+        hasInitialScrolledChatIdRef.current = currentChatId;
+        isNearBottomRef.current = true;
+      }
+    }
+  }, [isOpen, selectedUser?.id, selectedGroup?.id, groupMessages.length, messages.length]);
 
   const getGroupMembersCount = (group: any): number => {
     if (!group) return 0;
@@ -439,7 +458,7 @@ export default function ClubChat() {
     setTypingUsers({});
     setSelectedFiles([]);
     setFilePreviews([]);
-    hasPositionedChatForIdRef.current = null;
+    hasInitialScrolledChatIdRef.current = null;
   };
 
   const handleCloseChat = () => {
@@ -459,7 +478,7 @@ export default function ClubChat() {
     setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
-    hasPositionedChatForIdRef.current = null;
+    hasInitialScrolledChatIdRef.current = null;
   };
 
   const handleMoveCategory = (index: number, direction: "up" | "down") => {
@@ -665,7 +684,7 @@ export default function ClubChat() {
         setSelectedUser(null);
         setSelectedGroup(null);
         setChatInsideTab("messages");
-        hasPositionedChatForIdRef.current = null;
+        hasInitialScrolledChatIdRef.current = null;
         setIsOpen(true);
       }
     }
@@ -1212,7 +1231,7 @@ export default function ClubChat() {
               });
             }
 
-            // Przewijanie tylko wtedy, gdy użytkownik znajduje się na samym dole i nie dotyka ekranu
+            // Przewijanie wyłącznie wtedy, gdy użytkownik jest na dole i nie przewija palcem
             if (isNearBottomRef.current && !isUserTouchingRef.current) {
               setTimeout(() => scrollToBottom(true), 80);
             }
@@ -1305,14 +1324,14 @@ export default function ClubChat() {
 
   useEffect(() => {
     if (selectedGroup?.id) {
-      hasPositionedChatForIdRef.current = null;
+      hasInitialScrolledChatIdRef.current = null;
       fetchGroupMessages(selectedGroup.id);
     }
   }, [selectedGroup?.id]);
 
   useEffect(() => {
     if (selectedUser?.id) {
-      hasPositionedChatForIdRef.current = null;
+      hasInitialScrolledChatIdRef.current = null;
       fetchDirectMessages(selectedUser);
     }
   }, [selectedUser?.id]);
@@ -1354,7 +1373,7 @@ export default function ClubChat() {
           ADMIN_EMAILS.includes(selectedUser.email) ||
           selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
-        // 1. Natychmiastowe optymistyczne zerowanie plakietki
+        // 1. Optymistyczne zerowanie plakietki
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -2637,7 +2656,7 @@ export default function ClubChat() {
       const deltaX = e.touches[0].clientX - touchStartPos.current.x;
       const deltaY = e.touches[0].clientY - touchStartPos.current.y;
 
-      // Aktywacja swipe TYLKO, gdy ruch w poziomie jest wyraźnie dominujący nad pionowym
+      // Aktywacja swipe TYLKO, gdy ruch w poziomie wyraźnie dominuje nad ruchem w pionie
       if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5 && Math.abs(deltaX) > 15) {
         isSwipingMessage.current = true;
         const bounded = Math.max(-65, Math.min(65, deltaX));
@@ -4298,7 +4317,7 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* LISTA WIADOMOŚCI Z PŁYNNYM SCROLLEM BEZ PRZESKAKIWANIA I BLOKOWANIA */}
+              {/* LISTA WIADOMOŚCI Z PŁYNNYM SCROLLEM BEZ PRZESKAKIWANIA I BEZ ZATRZYMYWANIA NA NIEPRZECZYTANYCH */}
               <div
                 ref={messagesScrollRef}
                 onScroll={handleScroll}
@@ -4308,83 +4327,64 @@ export default function ClubChat() {
                 onTouchEnd={() => {
                   isUserTouchingRef.current = false;
                 }}
-                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full pb-14"
+                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full pb-16"
                 style={{
                   WebkitOverflowScrolling: "touch",
                   overscrollBehaviorY: "contain",
                 }}
               >
-                {(() => {
-                  const currentList = selectedGroup ? groupMessages : activeChatMessages;
-                  const firstUnreadIndex = currentList.findIndex(
-                    (m: any) => !m.przeczytana && !effectiveIds.includes(String(m.nadawca_id))
-                  );
+                {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
+                  const isMe = effectiveIds.includes(String(msg.nadawca_id));
+                  const isSpecial =
+                    Number(msg.nadawca_id) === SYSTEM_ID ||
+                    msg.nadawca_id === null ||
+                    msg.is_system ||
+                    msg.nadawca_rola === "system" ||
+                    msg.tresc?.includes("[REMINDER_5MIN_") ||
+                    msg.tresc?.includes("[REMINDER_END_OF_DAY_") ||
+                    msg.tresc?.includes("🎖️") ||
+                    msg.tresc?.includes("⚔️") ||
+                    msg.tresc?.includes("🎂") ||
+                    msg.tresc?.includes("Bazy Wiedzy");
 
-                  return currentList.map((msg: any, index: number) => {
-                    const isMe = effectiveIds.includes(String(msg.nadawca_id));
-                    const isSpecial =
-                      Number(msg.nadawca_id) === SYSTEM_ID ||
-                      msg.nadawca_id === null ||
-                      msg.is_system ||
-                      msg.nadawca_rola === "system" ||
-                      msg.tresc?.includes("[REMINDER_5MIN_") ||
-                      msg.tresc?.includes("[REMINDER_END_OF_DAY_") ||
-                      msg.tresc?.includes("🎖️") ||
-                      msg.tresc?.includes("⚔️") ||
-                      msg.tresc?.includes("🎂") ||
-                      msg.tresc?.includes("Bazy Wiedzy");
+                  const messageDateTime = msg.created_at
+                    ? new Date(msg.created_at).toLocaleString("pl-PL", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : "";
 
-                    const messageDateTime = msg.created_at
-                      ? new Date(msg.created_at).toLocaleString("pl-PL", {
-                          day: "2-digit",
-                          month: "2-digit",
-                          year: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "";
+                  const readTime = msg.przeczytana_at
+                    ? new Date(msg.przeczytana_at).toLocaleString("pl-PL", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : null;
 
-                    const readTime = msg.przeczytana_at
-                      ? new Date(msg.przeczytana_at).toLocaleString("pl-PL", {
-                          day: "2-digit",
-                          month: "2-digit",
-                          year: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : null;
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col ${isSpecial ? "items-center w-full my-1.5" : isMe ? "items-end" : "items-start"}`}
+                    >
+                      <MessageItem msg={msg} isMe={isMe} />
 
-                    const isFirstUnread = index === firstUnreadIndex;
-
-                    return (
-                      <React.Fragment key={msg.id}>
-                        {/* SEPARATOR DLA PIERWSZEJ NIEPRZECZYTANEJ WIADOMOŚCI */}
-                        {isFirstUnread && (
-                          <div className="w-full my-3 flex items-center gap-2 select-none">
-                            <div className="flex-1 h-px bg-amber-400/60"></div>
-                            <span className="text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 px-2.5 py-0.5 rounded-full shadow-xs">
-                              Nowe wiadomości poniżej
-                            </span>
-                            <div className="flex-1 h-px bg-amber-400/60"></div>
-                          </div>
+                      <div className="flex items-center gap-2 mt-1 px-1">
+                        <span className={`${getChatTextClass("meta")} text-slate-400 font-mono`}>{messageDateTime}</span>
+                        {isMe && !selectedGroup && (
+                          <span className={`${getChatTextClass("meta")} text-slate-400 font-medium`}>
+                            {msg.przeczytana && readTime ? `✓✓ Przeczytano: ${readTime}` : "✓ Wysłano"}
+                          </span>
                         )}
-
-                        <div className={`flex flex-col ${isSpecial ? "items-center w-full my-1.5" : isMe ? "items-end" : "items-start"}`}>
-                          <MessageItem msg={msg} isMe={isMe} />
-
-                          <div className="flex items-center gap-2 mt-1 px-1">
-                            <span className={`${getChatTextClass("meta")} text-slate-400 font-mono`}>{messageDateTime}</span>
-                            {isMe && !selectedGroup && (
-                              <span className={`${getChatTextClass("meta")} text-slate-400 font-medium`}>
-                                {msg.przeczytana && readTime ? `✓✓ Przeczytano: ${readTime}` : "✓ Wysłano"}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </React.Fragment>
-                    );
-                  });
-                })()}
+                      </div>
+                    </div>
+                  );
+                })}
 
                 {/* ANIMOWANY WSKAŹNIK PISANIA NA ŻYWO */}
                 {Object.keys(typingUsers).length > 0 && (
@@ -4418,7 +4418,7 @@ export default function ClubChat() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* PŁYWAJĄCY PRZYCISK ZE STRZAŁKĄ DO SZYBKIEGO POWROTU NA DÓŁ */}
+              {/* PŁYWAJĄCY PRZYCISK ZE STRZAŁKĄ DO SZYBKIEGO POWROTU NA SAM DÓŁ */}
               {showScrollBottomBtn && (
                 <button
                   type="button"
