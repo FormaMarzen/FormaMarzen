@@ -174,11 +174,11 @@ export default function ClubChat() {
 
   const [newMessage, setNewMessage] = useState("");
 
-  // Inteligentny scroll i przycisk powrotu na dół
+  // Inteligentny scroll i przycisk powrotu na dół (brak przeskakiwania)
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
-  const [hasScrolledToInitialPos, setHasScrolledToInitialPos] = useState(false);
+  const hasScrolledChatRef = useRef<boolean>(false);
 
   // Wskaźnik pisania na żywo (Typing Indicator)
   const [typingUsers, setTypingUsers] = useState<{ [key: string]: { name: string; timestamp: number } }>({});
@@ -227,13 +227,17 @@ export default function ClubChat() {
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Płynne przewijanie do samego dołu
+  // Płynne przewijanie wyłącznie kontenera wiadomości bez przeskakiwania okna
   const scrollToBottom = (smooth = true) => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
-      setShowScrollBottomBtn(false);
-      isNearBottomRef.current = true;
+    const container = messagesScrollRef.current;
+    if (!container) return;
+    if (smooth) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    } else {
+      container.scrollTop = container.scrollHeight;
     }
+    isNearBottomRef.current = true;
+    setShowScrollBottomBtn(false);
   };
 
   // Przewijanie do konkretnej wiadomości z podświetleniem (nawigacja cytatów)
@@ -246,14 +250,50 @@ export default function ClubChat() {
     }
   };
 
-  // Monitorowanie przewijania użytkownika
+  // Monitorowanie przewijania użytkownika bez wywoływania niepotrzebnych re-renderów
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
     const distanceToBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-    const isBottom = distanceToBottom < 80;
+    const isBottom = distanceToBottom < 60;
     isNearBottomRef.current = isBottom;
-    setShowScrollBottomBtn(!isBottom && target.scrollHeight > target.clientHeight + 100);
+    const shouldShow = !isBottom && target.scrollHeight > target.clientHeight + 80;
+    setShowScrollBottomBtn((prev) => (prev !== shouldShow ? shouldShow : prev));
   };
+
+  // Stabilne pozycjonowanie startowe (wywoływane tylko raz przy otwarciu wątku)
+  useEffect(() => {
+    if (!isOpen || (!selectedUser && !selectedGroup)) {
+      hasScrolledChatRef.current = false;
+      return;
+    }
+    const list = selectedGroup ? groupMessages : messages;
+    if (list.length === 0) return;
+
+    if (!hasScrolledChatRef.current) {
+      const myIds = [
+        currentUserId ? String(currentUserId) : "",
+        secondaryUserId ? String(secondaryUserId) : "",
+        isAdmin ? String(SYSTEM_ID) : "",
+        isAdmin ? "999999999" : "",
+      ].filter(Boolean);
+
+      const firstUnread = list.find(
+        (m: any) => !m.przeczytana && !myIds.includes(String(m.nadawca_id))
+      );
+      if (firstUnread) {
+        const targetEl = document.getElementById(`msg-bubble-${firstUnread.id}`);
+        if (targetEl) {
+          targetEl.scrollIntoView({ behavior: "auto", block: "center" });
+          hasScrolledChatRef.current = true;
+          return;
+        }
+      }
+      if (messagesScrollRef.current) {
+        messagesScrollRef.current.scrollTop = messagesScrollRef.current.scrollHeight;
+        hasScrolledChatRef.current = true;
+      }
+    }
+  }, [isOpen, selectedUser?.id, selectedGroup?.id, groupMessages.length, messages.length]);
 
   const getGroupMembersCount = (group: any): number => {
     if (!group) return 0;
@@ -430,9 +470,9 @@ export default function ClubChat() {
     setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
-    setHasScrolledToInitialPos(false);
     setSelectedFiles([]);
     setFilePreviews([]);
+    hasScrolledChatRef.current = false;
   };
 
   const handleCloseChat = () => {
@@ -452,7 +492,7 @@ export default function ClubChat() {
     setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
-    setHasScrolledToInitialPos(false);
+    hasScrolledChatRef.current = false;
   };
 
   const handleMoveCategory = (index: number, direction: "up" | "down") => {
@@ -658,6 +698,7 @@ export default function ClubChat() {
         setSelectedUser(null);
         setSelectedGroup(null);
         setChatInsideTab("messages");
+        hasScrolledChatRef.current = false;
         setIsOpen(true);
       }
     }
@@ -1116,7 +1157,7 @@ export default function ClubChat() {
     }
   };
 
-  // ZAMYKANIE MENU REAKCJI KLIKNIĘCIEM W DOWOLNE MIEJSCE
+  // ZAMYKANIE MENU REAKCJI KLIKNIĘCIEM W DOWOLNYM INNYM PUNKCIE
   useEffect(() => {
     if (!activeMessageMenuId) return;
     const handleGlobalClick = (e: MouseEvent) => {
@@ -1204,9 +1245,9 @@ export default function ClubChat() {
               });
             }
 
-            // Inteligentny scroll: zjeżdżamy na dół TYLKO, gdy użytkownik już znajduje się na dole
+            // Przewijamy tylko wtedy, gdy użytkownik był już na samym dole (nie przerywamy czytania)
             if (isNearBottomRef.current) {
-              setTimeout(() => scrollToBottom(true), 120);
+              setTimeout(() => scrollToBottom(true), 80);
             }
           } else if (payload.eventType === "UPDATE") {
             const updatedRow = payload.new;
@@ -1277,7 +1318,7 @@ export default function ClubChat() {
           fetchDirectMessages(selectedUserRef.current);
         }
       }
-    }, 4000);
+    }, 4500);
 
     const checkDailyUpdate = () => {
       const now = new Date();
@@ -1297,14 +1338,14 @@ export default function ClubChat() {
 
   useEffect(() => {
     if (selectedGroup?.id) {
-      setHasScrolledToInitialPos(false);
+      hasScrolledChatRef.current = false;
       fetchGroupMessages(selectedGroup.id);
     }
   }, [selectedGroup?.id]);
 
   useEffect(() => {
     if (selectedUser?.id) {
-      setHasScrolledToInitialPos(false);
+      hasScrolledChatRef.current = false;
       fetchDirectMessages(selectedUser);
     }
   }, [selectedUser?.id]);
@@ -1346,7 +1387,7 @@ export default function ClubChat() {
           ADMIN_EMAILS.includes(selectedUser.email) ||
           selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
-        // 1. Natychmiastowe zerowanie plakietki
+        // 1. Natychmiastowe lokalne zerowanie plakietki
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -1478,7 +1519,7 @@ export default function ClubChat() {
     setFilePreviews((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // ASYNCHRONICZNY, RÓWNOLEGŁY UPLOAD WIELU PLIKÓW Z KOMPRESJĄ
+  // ASYNCHRONICZNY, RÓWNOLEGŁY UPLOAD WIELU PLIKÓW Z KOMPRESJĄ W LOCIE
   const uploadFilesToSupabase = async (
     files: File[]
   ): Promise<{ url: string; type: string; name: string }[]> => {
@@ -1626,7 +1667,7 @@ export default function ClubChat() {
         setFilePreviews([]);
         setReplyingToMessage(null);
         updateLastSeen(senderId);
-        setTimeout(() => scrollToBottom(true), 80);
+        setTimeout(() => scrollToBottom(true), 60);
 
         sendGroupPushNotification(
           String(selectedGroup.id),
@@ -1691,7 +1732,7 @@ export default function ClubChat() {
         setFilePreviews([]);
         setReplyingToMessage(null);
         updateLastSeen(senderId);
-        setTimeout(() => scrollToBottom(true), 80);
+        setTimeout(() => scrollToBottom(true), 60);
 
         const pushBody = targetReplyAuthorId && String(targetReplyAuthorId) === String(selectedUser.id)
           ? `↩ Odpowiedział(a) na Twoją wiadomość: "${messageText || "📎 Załącznik"}"`
@@ -2621,23 +2662,25 @@ export default function ClubChat() {
     const handleTouchStart = (e: React.TouchEvent) => {
       if (isSpecial) return;
       touchStartPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      isSwipingMessage.current = true;
+      isSwipingMessage.current = false;
     };
 
     const handleTouchMove = (e: React.TouchEvent) => {
-      if (!isSwipingMessage.current || isSpecial) return;
+      if (isSpecial) return;
       const deltaX = e.touches[0].clientX - touchStartPos.current.x;
       const deltaY = e.touches[0].clientY - touchStartPos.current.y;
 
-      if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
+      // Aktywacja swipe TYLKO, gdy ruch w poziomie jest wyraźnie dominujący nad pionowym
+      if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5 && Math.abs(deltaX) > 15) {
+        isSwipingMessage.current = true;
         const bounded = Math.max(-65, Math.min(65, deltaX));
         setDragOffset(bounded);
       }
     };
 
     const handleTouchEnd = () => {
-      if (!isSwipingMessage.current || isSpecial) return;
-      if (Math.abs(dragOffset) >= 40) {
+      if (isSpecial) return;
+      if (isSwipingMessage.current && Math.abs(dragOffset) >= 40) {
         setReplyingToMessage(msg);
       }
       setDragOffset(0);
@@ -3247,7 +3290,6 @@ export default function ClubChat() {
           ? {
               left: `${position.x}px`,
               top: `${position.y}px`,
-              touchAction: "none",
             }
           : {
               right: "20px",
@@ -4289,31 +4331,11 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* LISTA WIADOMOŚCI Z INTELIGENTNYM POZYCJONOWANIEM I SEPARATOREM NOWYCH */}
+              {/* LISTA WIADOMOŚCI Z PŁYNNYM SCROLLEM BEZ PRZESKAKIWANIA OKNA */}
               <div
-                ref={(el) => {
-                  messagesScrollRef.current = el;
-                  if (el && !hasScrolledToInitialPos) {
-                    const list = selectedGroup ? groupMessages : activeChatMessages;
-                    if (list.length > 0) {
-                      const firstUnread = list.find(
-                        (m: any) => !m.przeczytana && !effectiveIds.includes(String(m.nadawca_id))
-                      );
-                      if (firstUnread) {
-                        const targetEl = document.getElementById(`msg-bubble-${firstUnread.id}`);
-                        if (targetEl) {
-                          targetEl.scrollIntoView({ behavior: "auto", block: "center" });
-                          setHasScrolledToInitialPos(true);
-                          return;
-                        }
-                      }
-                      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-                      setHasScrolledToInitialPos(true);
-                    }
-                  }
-                }}
+                ref={messagesScrollRef}
                 onScroll={handleScroll}
-                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full"
+                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full pb-6"
               >
                 {(() => {
                   const currentList = selectedGroup ? groupMessages : activeChatMessages;
@@ -4419,13 +4441,13 @@ export default function ClubChat() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* PRZYCISK ZE STRZAŁKĄ W DÓŁ DO SZYBKIEGO POWROTU NA DÓŁ CZATU */}
+              {/* PŁYWAJĄCY PRZYCISK ZE STRZAŁKĄ DO SZYBKIEGO POWROTU NA SAM DÓŁ */}
               {showScrollBottomBtn && (
                 <button
                   type="button"
                   onClick={() => scrollToBottom(true)}
                   className="absolute right-4 bottom-20 z-20 bg-amber-400 hover:bg-amber-500 text-slate-950 p-2.5 rounded-full shadow-2xl border-2 border-slate-900 transition-all cursor-pointer flex items-center justify-center animate-bounce hover:scale-105 active:scale-95"
-                  title="Przewiń na sam koniec"
+                  title="Przewiń na sam dół"
                 >
                   <span className="text-sm font-black leading-none">⬇️</span>
                 </button>
@@ -5217,25 +5239,27 @@ export default function ClubChat() {
         </div>
       )}
 
-      {/* PRZYCISK OTWARCIA CZATU (DYMEK) */}
-      <button
-        type="button"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        className={`w-14 h-14 rounded-full bg-slate-900 hover:bg-slate-800 text-white shadow-2xl flex items-center justify-center text-2xl cursor-grab active:cursor-grabbing relative border-2 border-amber-400 select-none touch-none ${
-          isDragging ? "scale-95 opacity-90" : "transition-transform hover:scale-105"
-        }`}
-        title="Przeciągnij lub kliknij, aby otworzyć"
-      >
-        <span className="pointer-events-none">💬</span>
+      {/* PRZYCISK OTWARCIA CZATU (DYMEK) – UKRYWANY PO OTWARCIU CZATU, ABY NIE ZASŁANIAŁ EKRANU */}
+      {!isOpen && (
+        <button
+          type="button"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          className={`w-14 h-14 rounded-full bg-slate-900 hover:bg-slate-800 text-white shadow-2xl flex items-center justify-center text-2xl cursor-grab active:cursor-grabbing relative border-2 border-amber-400 select-none touch-none ${
+            isDragging ? "scale-95 opacity-90" : "transition-transform hover:scale-105"
+          }`}
+          title="Przeciągnij lub kliknij, aby otworzyć"
+        >
+          <span className="pointer-events-none">💬</span>
 
-        {totalUnreadCount > 0 && !isOpen && (
-          <span className="pointer-events-none absolute -top-1 -right-1 bg-rose-500 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center shadow-md border-2 border-white animate-pulse">
-            {totalUnreadCount}
-          </span>
-        )}
-      </button>
+          {totalUnreadCount > 0 && (
+            <span className="pointer-events-none absolute -top-1 -right-1 bg-rose-500 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center shadow-md border-2 border-white animate-pulse">
+              {totalUnreadCount}
+            </span>
+          )}
+        </button>
+      )}
     </div>
   );
 }
