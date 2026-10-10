@@ -36,6 +36,60 @@ const ImageIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   </svg>
 );
 
+// Funkcja kompresji zdjęć w przeglądarce przed wysłaniem (drastyczne przyspieszenie uploadu)
+const compressImageFile = async (file: File): Promise<File> => {
+  if (!file.type.startsWith("image/") || file.type === "image/gif") {
+    return file;
+  }
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const maxDim = 1600;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob && blob.size < file.size) {
+              const compressed = new File([blob], file.name.replace(/\.[^/.]+$/, ".jpg"), {
+                type: "image/jpeg",
+                lastModified: Date.now(),
+              });
+              resolve(compressed);
+            } else {
+              resolve(file);
+            }
+          },
+          "image/jpeg",
+          0.8
+        );
+      };
+      img.onerror = () => resolve(file);
+    };
+    reader.onerror = () => resolve(file);
+  });
+};
+
 export default function ClubChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
@@ -66,6 +120,9 @@ export default function ClubChat() {
   // Stan dla menu reakcji / akcji dla konkretnej wiadomości
   const [activeMessageMenuId, setActiveMessageMenuId] = useState<string | null>(null);
 
+  // Podświetlenie wiadomości po kliknięciu w cytat
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | number | null>(null);
+
   // Menu opcji w nagłówku aktywnej rozmowy (...)
   const [showChatOptionsMenu, setShowChatOptionsMenu] = useState(false);
 
@@ -88,11 +145,13 @@ export default function ClubChat() {
   const [newCategoryInput, setNewCategoryInput] = useState("");
 
   const [klienci, setKlienci] = useState<any[]>([]);
+
   // Unifikacja tożsamości Administratora w całym komponencie
   const adminClientIds = klienci
     .filter((k: any) => ADMIN_EMAILS.includes(k.email) || Number(k.id) === SYSTEM_ID || Number(k.id) === 999999999)
     .map((k: any) => String(k.id));
   const allAdminIds = Array.from(new Set([...adminClientIds, "999999999", String(SYSTEM_ID)]));
+
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<any | null>(null);
@@ -115,15 +174,21 @@ export default function ClubChat() {
 
   const [newMessage, setNewMessage] = useState("");
 
+  // Inteligentny scroll i przycisk powrotu na dół
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const isNearBottomRef = useRef<boolean>(true);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
+  const [hasScrolledToInitialPos, setHasScrolledToInitialPos] = useState(false);
+
   // Wskaźnik pisania na żywo (Typing Indicator)
   const [typingUsers, setTypingUsers] = useState<{ [key: string]: { name: string; timestamp: number } }>({});
   const typingTimeoutRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
   const lastTypingSentTimeRef = useRef<number>(0);
   const realtimeChannelRef = useRef<any>(null);
 
-  // Załączniki do wiadomości
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [filePreview, setFilePreview] = useState<string | null>(null);
+  // Obsługa wielu załączników jednocześnie (Multi-upload zdjęć)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [filePreviews, setFilePreviews] = useState<{ url: string; name: string; type: string }[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -162,15 +227,33 @@ export default function ClubChat() {
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const scrollToBottom = () => {
-    if (chatInsideTab === "messages") {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // Płynne przewijanie do samego dołu
+  const scrollToBottom = (smooth = true) => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+      setShowScrollBottomBtn(false);
+      isNearBottomRef.current = true;
     }
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, groupMessages, selectedUser, selectedGroup, chatInsideTab, typingUsers]);
+  // Przewijanie do konkretnej wiadomości z podświetleniem (nawigacja cytatów)
+  const scrollToMessage = (msgId: string | number) => {
+    const el = document.getElementById(`msg-bubble-${msgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedMessageId(msgId);
+      setTimeout(() => setHighlightedMessageId(null), 2500);
+    }
+  };
+
+  // Monitorowanie przewijania użytkownika
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const distanceToBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+    const isBottom = distanceToBottom < 80;
+    isNearBottomRef.current = isBottom;
+    setShowScrollBottomBtn(!isBottom && target.scrollHeight > target.clientHeight + 100);
+  };
 
   const getGroupMembersCount = (group: any): number => {
     if (!group) return 0;
@@ -347,6 +430,9 @@ export default function ClubChat() {
     setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
+    setHasScrolledToInitialPos(false);
+    setSelectedFiles([]);
+    setFilePreviews([]);
   };
 
   const handleCloseChat = () => {
@@ -355,8 +441,8 @@ export default function ClubChat() {
     selectedUserRef.current = null;
     setSelectedUser(null);
     setSelectedGroup(null);
-    setSelectedFile(null);
-    setFilePreview(null);
+    setSelectedFiles([]);
+    setFilePreviews([]);
     setChatInsideTab("messages");
     setFullscreenImage(null);
     setActiveMessageMenuId(null);
@@ -366,6 +452,7 @@ export default function ClubChat() {
     setShowSettingsMenu(false);
     setReplyingToMessage(null);
     setTypingUsers({});
+    setHasScrolledToInitialPos(false);
   };
 
   const handleMoveCategory = (index: number, direction: "up" | "down") => {
@@ -987,7 +1074,7 @@ export default function ClubChat() {
     }
   };
 
-  // POBIERANIE GŁÓWNYCH WIADOMOŚCI (BEZ BŁĘDÓW SKŁADNIOWYCH POSTGREST)
+  // POBIERANIE GŁÓWNYCH WIADOMOŚCI
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
@@ -1005,7 +1092,6 @@ export default function ClubChat() {
         .order("created_at", { ascending: false })
         .limit(3000);
 
-      // Czysty, bezbłędny filtr relacji nadawca-odbiorca dla klubowicza
       if (!isAdmin) {
         query = query.or(
           `nadawca_id.in.(${myIds.join(",")}),odbiorca_id.in.(${myIds.join(",")})`
@@ -1029,6 +1115,19 @@ export default function ClubChat() {
       console.error("Błąd pobierania wiadomości ogólnych:", err);
     }
   };
+
+  // ZAMYKANIE MENU REAKCJI KLIKNIĘCIEM W DOWOLNE MIEJSCE
+  useEffect(() => {
+    if (!activeMessageMenuId) return;
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".message-menu-popup") && !target.closest(".message-item-card")) {
+        setActiveMessageMenuId(null);
+      }
+    };
+    window.addEventListener("click", handleGlobalClick);
+    return () => window.removeEventListener("click", handleGlobalClick);
+  }, [activeMessageMenuId]);
 
   // REALTIME SYNCHRONIZACJA Z BROADCASTEM PISANIA I ZAPASOWYM POLLINGIEM
   useEffect(() => {
@@ -1104,6 +1203,11 @@ export default function ClubChat() {
                 return [...prev, newRow];
               });
             }
+
+            // Inteligentny scroll: zjeżdżamy na dół TYLKO, gdy użytkownik już znajduje się na dole
+            if (isNearBottomRef.current) {
+              setTimeout(() => scrollToBottom(true), 120);
+            }
           } else if (payload.eventType === "UPDATE") {
             const updatedRow = payload.new;
             setMessages((prev) => prev.map((m) => (m.id === updatedRow.id ? updatedRow : m)));
@@ -1173,7 +1277,7 @@ export default function ClubChat() {
           fetchDirectMessages(selectedUserRef.current);
         }
       }
-    }, 3500);
+    }, 4000);
 
     const checkDailyUpdate = () => {
       const now = new Date();
@@ -1193,12 +1297,14 @@ export default function ClubChat() {
 
   useEffect(() => {
     if (selectedGroup?.id) {
+      setHasScrolledToInitialPos(false);
       fetchGroupMessages(selectedGroup.id);
     }
   }, [selectedGroup?.id]);
 
   useEffect(() => {
     if (selectedUser?.id) {
+      setHasScrolledToInitialPos(false);
       fetchDirectMessages(selectedUser);
     }
   }, [selectedUser?.id]);
@@ -1240,7 +1346,7 @@ export default function ClubChat() {
           ADMIN_EMAILS.includes(selectedUser.email) ||
           selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
-        // 1. Natychmiastowe optymistyczne zerowanie plakietki
+        // 1. Natychmiastowe zerowanie plakietki
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -1345,44 +1451,70 @@ export default function ClubChat() {
     }
   }, [isOpen, selectedGroup?.id, currentUserId, secondaryUserId, isAdmin]);
 
+  // OBSŁUGA WYBORU WIELU PLIKÓW / ZDJĘĆ
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
-    if (file.size > 15 * 1024 * 1024) {
-      alert("Maksymalny rozmiar pliku to 15MB");
-      return;
+    const validFiles = files.filter((f) => f.size <= 25 * 1024 * 1024);
+    if (validFiles.length < files.length) {
+      alert("Część plików przekracza limit 25MB i została pominięta.");
     }
 
-    setSelectedFile(file);
-    if (file.type.startsWith("image/")) {
-      setFilePreview(URL.createObjectURL(file));
-    } else {
-      setFilePreview(null);
-    }
+    setSelectedFiles((prev) => [...prev, ...validFiles]);
+
+    const newPreviews = validFiles.map((f) => ({
+      url: f.type.startsWith("image/") ? URL.createObjectURL(f) : "",
+      name: f.name,
+      type: f.type.startsWith("image/") ? "image" : f.type === "application/pdf" ? "pdf" : "file",
+    }));
+
+    setFilePreviews((prev) => [...prev, ...newPreviews]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const uploadFileToSupabase = async (file: File): Promise<{ url: string; type: string; name: string } | null> => {
+  const handleRemoveSelectedFile = (index: number) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+    setFilePreviews((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // ASYNCHRONICZNY, RÓWNOLEGŁY UPLOAD WIELU PLIKÓW Z KOMPRESJĄ
+  const uploadFilesToSupabase = async (
+    files: File[]
+  ): Promise<{ url: string; type: string; name: string }[]> => {
     try {
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
-      const filePath = `attachments/${fileName}`;
+      const uploadPromises = files.map(async (file) => {
+        const processedFile = await compressImageFile(file);
+        const fileExt = processedFile.name.split(".").pop();
+        const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+        const filePath = `attachments/${fileName}`;
 
-      const { error: uploadError } = await supabase.storage.from("chat-attachments").upload(filePath, file);
-      if (uploadError) {
-        console.error("Błąd przesyłania załącznika:", uploadError);
-        return null;
-      }
+        const { error: uploadError } = await supabase.storage
+          .from("chat-attachments")
+          .upload(filePath, processedFile);
 
-      const { data } = supabase.storage.from("chat-attachments").getPublicUrl(filePath);
-      return {
-        url: data.publicUrl,
-        type: file.type.startsWith("image/") ? "image" : file.type === "application/pdf" ? "pdf" : "file",
-        name: file.name,
-      };
+        if (uploadError) {
+          console.error("Błąd uploadu pliku:", uploadError);
+          return null;
+        }
+
+        const { data } = supabase.storage.from("chat-attachments").getPublicUrl(filePath);
+        return {
+          url: data.publicUrl,
+          type: processedFile.type.startsWith("image/")
+            ? "image"
+            : processedFile.type === "application/pdf"
+            ? "pdf"
+            : "file",
+          name: processedFile.name,
+        };
+      });
+
+      const results = await Promise.all(uploadPromises);
+      return results.filter(Boolean) as { url: string; type: string; name: string }[];
     } catch (err) {
-      console.error("Upload error:", err);
-      return null;
+      console.error("Błąd uploadu wielu plików:", err);
+      return [];
     }
   };
 
@@ -1390,24 +1522,26 @@ export default function ClubChat() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      alert("Maksymalny rozmiar ikony to 5MB");
+    if (file.size > 8 * 1024 * 1024) {
+      alert("Maksymalny rozmiar ikony to 8MB");
       return;
     }
 
-    const uploaded = await uploadFileToSupabase(file);
-    if (uploaded && uploaded.url) {
+    const compressed = await compressImageFile(file);
+    const uploaded = await uploadFilesToSupabase([compressed]);
+    if (uploaded.length > 0 && uploaded[0].url) {
       if (isEditing) {
-        setEditGroupIcon(uploaded.url);
+        setEditGroupIcon(uploaded[0].url);
       } else {
-        setNewGroupIcon(uploaded.url);
+        setNewGroupIcon(uploaded[0].url);
       }
     }
   };
 
+  // GŁÓWNA WYSYŁKA WIADOMOŚCI Z OBSŁUGĄ MULTI-UPLOADU I GALERII
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!newMessage.trim() && !selectedFile) || (!selectedUser && !selectedGroup) || !currentUserId) return;
+    if ((!newMessage.trim() && selectedFiles.length === 0) || (!selectedUser && !selectedGroup) || !currentUserId) return;
 
     const senderId = secondaryUserId || currentUserId;
 
@@ -1420,28 +1554,44 @@ export default function ClubChat() {
     }
 
     setIsUploading(true);
-    let attachmentData: { url: string; type: string; name: string } | null = null;
+    let uploadedAttachments: { url: string; type: string; name: string }[] = [];
 
-    if (selectedFile) {
-      attachmentData = await uploadFileToSupabase(selectedFile);
+    if (selectedFiles.length > 0) {
+      uploadedAttachments = await uploadFilesToSupabase(selectedFiles);
     }
 
     const messageText = newMessage.trim();
+
+    let finalAttachmentUrl: string | null = null;
+    let finalAttachmentType: string | null = null;
+    let finalAttachmentName: string | null = null;
+
+    if (uploadedAttachments.length === 1) {
+      finalAttachmentUrl = uploadedAttachments[0].url;
+      finalAttachmentType = uploadedAttachments[0].type;
+      finalAttachmentName = uploadedAttachments[0].name;
+    } else if (uploadedAttachments.length > 1) {
+      finalAttachmentUrl = JSON.stringify(uploadedAttachments.map((a) => a.url));
+      finalAttachmentType = "images_gallery";
+      finalAttachmentName = JSON.stringify(uploadedAttachments.map((a) => a.name));
+    }
 
     const payload: any = {
       nadawca_id: senderId,
       nadawca_nazwa: currentUserName,
       nadawca_avatar: currentUserAvatar,
       tresc: messageText,
-      attachment_url: attachmentData?.url || null,
-      attachment_type: attachmentData?.type || null,
-      attachment_name: attachmentData?.name || null,
+      attachment_url: finalAttachmentUrl,
+      attachment_type: finalAttachmentType,
+      attachment_name: finalAttachmentName,
       przeczytana: false,
       przeczytana_at: null,
       przypinana: false,
       reakcje: {},
       reply_to_id: replyingToMessage?.id ? String(replyingToMessage.id) : null,
-      reply_to_text: replyingToMessage ? (replyingToMessage.tresc || (replyingToMessage.attachment_url ? "📎 Załącznik" : "Wiadomość")) : null,
+      reply_to_text: replyingToMessage
+        ? replyingToMessage.tresc || (replyingToMessage.attachment_url ? "📎 Załącznik" : "Wiadomość")
+        : null,
       reply_to_sender: replyingToMessage?.nadawca_nazwa || null,
     };
 
@@ -1472,17 +1622,18 @@ export default function ClubChat() {
           setMessages((prev) => (prev.some((m) => m.id === sentRow.id) ? prev : [...prev, sentRow]));
         }
         setNewMessage("");
-        setSelectedFile(null);
-        setFilePreview(null);
+        setSelectedFiles([]);
+        setFilePreviews([]);
         setReplyingToMessage(null);
         updateLastSeen(senderId);
+        setTimeout(() => scrollToBottom(true), 80);
 
         sendGroupPushNotification(
           String(selectedGroup.id),
           String(senderId),
           currentUserName,
           selectedGroup.nazwa,
-          messageText || "📎 Załącznik"
+          messageText || (uploadedAttachments.length > 1 ? `📷 Zdjęcia (${uploadedAttachments.length})` : "📎 Załącznik")
         );
 
         if (targetReplyAuthorId && String(targetReplyAuthorId) !== String(senderId)) {
@@ -1536,14 +1687,15 @@ export default function ClubChat() {
         }
 
         setNewMessage("");
-        setSelectedFile(null);
-        setFilePreview(null);
+        setSelectedFiles([]);
+        setFilePreviews([]);
         setReplyingToMessage(null);
         updateLastSeen(senderId);
+        setTimeout(() => scrollToBottom(true), 80);
 
         const pushBody = targetReplyAuthorId && String(targetReplyAuthorId) === String(selectedUser.id)
           ? `↩ Odpowiedział(a) na Twoją wiadomość: "${messageText || "📎 Załącznik"}"`
-          : messageText || "📎 Załącznik";
+          : messageText || (uploadedAttachments.length > 1 ? `📷 Zdjęcia (${uploadedAttachments.length})` : "📎 Załącznik");
 
         sendChatPushNotification(selectedUser.id, currentUserName, pushBody);
       }
@@ -1620,6 +1772,11 @@ export default function ClubChat() {
       if (selectedUser) fetchDirectMessages(selectedUser);
     }
     setActiveMessageMenuId(null);
+  };
+
+  // OBSŁUGA PODWÓJNEGO KLIKNIĘCIA – AUTOMATYCZNE DODAWANIE SERDUSZKA ❤️
+  const handleDoubleClickMessage = (msg: any) => {
+    handleToggleReaction(msg, "❤️");
   };
 
   const handleToggleGroupMembership = async (group: any, shouldJoin: boolean) => {
@@ -1863,14 +2020,28 @@ export default function ClubChat() {
 
   const handleSendBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!broadcastMessage.trim() && !selectedFile) return;
+    if (!broadcastMessage.trim() && selectedFiles.length === 0) return;
 
     setIsSendingBroadcast(true);
     const senderId = secondaryUserId || currentUserId;
 
-    let attachmentData: { url: string; type: string; name: string } | null = null;
-    if (selectedFile) {
-      attachmentData = await uploadFileToSupabase(selectedFile);
+    let uploadedAttachments: { url: string; type: string; name: string }[] = [];
+    if (selectedFiles.length > 0) {
+      uploadedAttachments = await uploadFilesToSupabase(selectedFiles);
+    }
+
+    let finalAttachmentUrl: string | null = null;
+    let finalAttachmentType: string | null = null;
+    let finalAttachmentName: string | null = null;
+
+    if (uploadedAttachments.length === 1) {
+      finalAttachmentUrl = uploadedAttachments[0].url;
+      finalAttachmentType = uploadedAttachments[0].type;
+      finalAttachmentName = uploadedAttachments[0].name;
+    } else if (uploadedAttachments.length > 1) {
+      finalAttachmentUrl = JSON.stringify(uploadedAttachments.map((a) => a.url));
+      finalAttachmentType = "images_gallery";
+      finalAttachmentName = JSON.stringify(uploadedAttachments.map((a) => a.name));
     }
 
     const eligibleUsers = klienci.filter(
@@ -1884,9 +2055,9 @@ export default function ClubChat() {
       odbiorca_id: user.id,
       grupa_id: null,
       tresc: broadcastMessage.trim(),
-      attachment_url: attachmentData?.url || null,
-      attachment_type: attachmentData?.type || null,
-      attachment_name: attachmentData?.name || null,
+      attachment_url: finalAttachmentUrl,
+      attachment_type: finalAttachmentType,
+      attachment_name: finalAttachmentName,
       przeczytana: false,
       przeczytana_at: null,
       przypinana: false,
@@ -1897,11 +2068,15 @@ export default function ClubChat() {
       const { error } = await supabase.from("czat_wiadomosci").insert(payloads);
       if (!error) {
         eligibleUsers.forEach((user) => {
-          sendChatPushNotification(user.id, currentUserName, broadcastMessage.trim() || "📎 Wysłano załącznik do wszystkich");
+          sendChatPushNotification(
+            user.id,
+            currentUserName,
+            broadcastMessage.trim() || (uploadedAttachments.length > 1 ? `📷 Zdjęcia (${uploadedAttachments.length})` : "📎 Załącznik")
+          );
         });
         setBroadcastMessage("");
-        setSelectedFile(null);
-        setFilePreview(null);
+        setSelectedFiles([]);
+        setFilePreviews([]);
         setShowBroadcastModal(false);
         fetchMessages();
       }
@@ -2064,9 +2239,27 @@ export default function ClubChat() {
   });
 
   const currentConversationMessages = selectedGroup ? groupMessages : activeChatMessages;
-  const conversationImages = currentConversationMessages.filter(
-    (m: any) => m.attachment_url && m.attachment_type === "image"
-  );
+
+  // Spłaszczona lista wszystkich zdjęć dla zakładki Multimedia (obsługuje pojedyncze i multi-upload)
+  const conversationImages: any[] = [];
+  currentConversationMessages.forEach((m: any) => {
+    if (m.attachment_type === "image" && m.attachment_url) {
+      conversationImages.push(m);
+    } else if (m.attachment_type === "images_gallery" && m.attachment_url) {
+      try {
+        const urls: string[] = JSON.parse(m.attachment_url);
+        urls.forEach((u) => {
+          conversationImages.push({
+            ...m,
+            attachment_url: u,
+          });
+        });
+      } catch {
+        conversationImages.push(m);
+      }
+    }
+  });
+
   const pinnedMessage = currentConversationMessages.find((m: any) => m.przypinana);
 
   let groupMemberIds: string[] = [];
@@ -2130,7 +2323,10 @@ export default function ClubChat() {
           .replace(/\[REMINDER_5MIN_[^\]]+\]/g, "")
           .replace(/\[REMINDER_END_OF_DAY_[^\]]+\]/g, "")
           .trim();
-        latestMessageTextMap.set(otherId, cleanPreview || (m.attachment_url ? "📎 Załącznik" : ""));
+        latestMessageTextMap.set(
+          otherId,
+          cleanPreview || (m.attachment_type === "images_gallery" ? "📷 Zdjęcia" : m.attachment_url ? "📎 Załącznik" : "")
+        );
       }
     }
   });
@@ -2158,7 +2354,7 @@ export default function ClubChat() {
     }
   });
 
-  // SORTOWANIE: NIEPRZECZYTANE NA GÓRZE, NASTĘPNIE WG DATY OSTATNIEJ WIADOMOŚCI
+  // SORTOWANIE: NIEPRZECZYTANE NA GÓRZE, NASTĘPNIE WG CZASU OSTATNIEJ WIADOMOŚCI
   const displayedUsers = klienci
     .filter((k: any) => !effectiveIds.includes(String(k.id)))
     .filter((k: any) => {
@@ -2213,11 +2409,11 @@ export default function ClubChat() {
         return String(m.nadawca_id) === String(b.id);
       }).length;
 
-      // 1. Priorytet dla wątków z nowymi wiadomościami
+      // Priorytet dla nieprzeczytanych wiadomości
       if (unreadA > 0 && unreadB === 0) return -1;
       if (unreadB > 0 && unreadA === 0) return 1;
 
-      // 2. Sortowanie wg czasu ostatniej wiadomości
+      // Chronologia
       const timeA = latestMessageMap.get(String(a.id)) || 0;
       const timeB = latestMessageMap.get(String(b.id)) || 0;
       return timeB - timeA;
@@ -2312,35 +2508,76 @@ export default function ClubChat() {
     return `Aktywny ${diffDays} dni temu`;
   };
 
+  // RENDEROWANIE ZAŁĄCZNIKÓW (OBSŁUGUJE MULTI-UPLOAD ORAZ POJEDYNCZE PLIKI)
   const renderAttachment = (msg: any) => {
     if (!msg.attachment_url) return null;
 
+    // Galeria wielu zdjęć w jednym dymku
+    if (msg.attachment_type === "images_gallery") {
+      let urls: string[] = [];
+      try {
+        urls = JSON.parse(msg.attachment_url);
+      } catch {
+        urls = [msg.attachment_url];
+      }
+
+      return (
+        <div className={`grid gap-1.5 mt-2 rounded-2xl overflow-hidden ${urls.length === 2 ? "grid-cols-2" : urls.length >= 3 ? "grid-cols-3" : "grid-cols-1"}`}>
+          {urls.map((url, index) => (
+            <button
+              key={index}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFullscreenImage(url);
+              }}
+              className="relative aspect-square overflow-hidden bg-slate-900/40 rounded-xl group cursor-pointer border border-slate-700/30"
+            >
+              <img
+                src={url}
+                alt={`Zdjęcie ${index + 1}`}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                loading="lazy"
+              />
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    // Pojedyncze zdjęcie
     if (msg.attachment_type === "image") {
       return (
         <button
           type="button"
-          onClick={() => setFullscreenImage(msg.attachment_url)}
-          className="block mt-2 rounded-xl overflow-hidden border border-slate-700/30 text-left cursor-pointer group"
+          onClick={(e) => {
+            e.stopPropagation();
+            setFullscreenImage(msg.attachment_url);
+          }}
+          className="block mt-2 rounded-2xl overflow-hidden border border-slate-700/30 text-left cursor-pointer group max-w-full"
         >
           <img
             src={msg.attachment_url}
             alt="Załącznik"
-            className="max-h-48 w-full object-cover group-hover:scale-105 transition-transform"
+            className="max-h-64 w-full object-cover group-hover:scale-105 transition-transform"
+            loading="lazy"
           />
         </button>
       );
     }
 
+    // Dokument / PDF
     return (
       <a
         href={msg.attachment_url}
         target="_blank"
         rel="noopener noreferrer"
         download
-        className="mt-2 flex items-center gap-2 p-2 rounded-xl bg-slate-800/20 hover:bg-slate-800/40 border border-slate-300/30 transition-colors text-xs font-semibold"
+        onClick={(e) => e.stopPropagation()}
+        className="mt-2 flex items-center gap-2 p-2.5 rounded-xl bg-slate-800/20 hover:bg-slate-800/40 border border-slate-300/30 transition-colors text-xs font-semibold"
       >
         <span className="text-base">{msg.attachment_type === "pdf" ? "📄" : "📎"}</span>
-        <span className="truncate max-w-[200px]">{msg.attachment_name || "Pobierz załącznik"}</span>
+        <span className="truncate max-w-[220px]">{msg.attachment_name || "Pobierz załącznik"}</span>
       </a>
     );
   };
@@ -2379,6 +2616,7 @@ export default function ClubChat() {
     const [dragOffset, setDragOffset] = useState(0);
     const touchStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
     const isSwipingMessage = useRef(false);
+    const lastTapTimeRef = useRef<number>(0);
 
     const handleTouchStart = (e: React.TouchEvent) => {
       if (isSpecial) return;
@@ -2406,9 +2644,21 @@ export default function ClubChat() {
       isSwipingMessage.current = false;
     };
 
+    // Detekcja podwójnego stuknięcia na telefonach
+    const handleBubbleClick = (e: React.MouseEvent) => {
+      const now = Date.now();
+      if (now - lastTapTimeRef.current < 280) {
+        handleDoubleClickMessage(msg);
+        lastTapTimeRef.current = 0;
+      } else {
+        lastTapTimeRef.current = now;
+        setActiveMessageMenuId(activeMessageMenuId === msg.id ? null : msg.id);
+      }
+    };
+
     if (isTrainer5MinReminder) {
       return (
-        <div className="w-full bg-gradient-to-br from-amber-500/20 via-slate-900 to-sky-950 border-2 border-amber-400 rounded-3xl p-4 shadow-xl text-white space-y-3">
+        <div id={`msg-bubble-${msg.id}`} className="w-full bg-gradient-to-br from-amber-500/20 via-slate-900 to-sky-950 border-2 border-amber-400 rounded-3xl p-4 shadow-xl text-white space-y-3">
           <div className="flex items-center justify-between border-b border-amber-400/40 pb-2">
             <div className="flex items-center gap-2">
               <span className="text-2xl animate-pulse">⏱️</span>
@@ -2438,7 +2688,7 @@ export default function ClubChat() {
 
     if (isTrainerEndOfDayReminder) {
       return (
-        <div className="w-full bg-gradient-to-br from-emerald-500/20 via-slate-900 to-slate-950 border-2 border-emerald-400 rounded-3xl p-4 shadow-xl text-white space-y-3">
+        <div id={`msg-bubble-${msg.id}`} className="w-full bg-gradient-to-br from-emerald-500/20 via-slate-900 to-slate-950 border-2 border-emerald-400 rounded-3xl p-4 shadow-xl text-white space-y-3">
           <div className="flex items-center justify-between border-b border-emerald-400/40 pb-2">
             <div className="flex items-center gap-2">
               <span className="text-2xl">📋</span>
@@ -2468,7 +2718,7 @@ export default function ClubChat() {
 
     if (isRedukcjaAlert) {
       return (
-        <div className="w-full bg-gradient-to-br from-amber-500/20 via-slate-900/90 to-rose-950/40 border-2 border-amber-400 rounded-3xl p-4 shadow-lg text-white space-y-2.5">
+        <div id={`msg-bubble-${msg.id}`} className="w-full bg-gradient-to-br from-amber-500/20 via-slate-900/90 to-rose-950/40 border-2 border-amber-400 rounded-3xl p-4 shadow-lg text-white space-y-2.5">
           <div className="flex items-center justify-between border-b border-amber-400/40 pb-2">
             <div className="flex items-center gap-2">
               <span className="text-2xl animate-bounce">🔥</span>
@@ -2490,7 +2740,7 @@ export default function ClubChat() {
 
     if (isBirthdayNotification) {
       return (
-        <div className="w-full bg-gradient-to-br from-amber-500/15 via-rose-500/10 to-purple-600/15 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2.5">
+        <div id={`msg-bubble-${msg.id}`} className="w-full bg-gradient-to-br from-amber-500/15 via-rose-500/10 to-purple-600/15 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2.5">
           <div className="flex items-center justify-between border-b border-amber-300/40 pb-2">
             <div className="flex items-center gap-2">
               <span className="text-2xl animate-bounce">🎂</span>
@@ -2510,7 +2760,7 @@ export default function ClubChat() {
 
     if (isKnowledgeBaseNotification) {
       return (
-        <div className="w-full bg-gradient-to-br from-sky-50 to-amber-50/60 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
+        <div id={`msg-bubble-${msg.id}`} className="w-full bg-gradient-to-br from-sky-50 to-amber-50/60 border-2 border-amber-400 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
           <div className="flex items-center justify-between border-b border-amber-300/50 pb-2">
             <div className="flex items-center gap-2">
               <span className="text-xl">📚</span>
@@ -2530,7 +2780,7 @@ export default function ClubChat() {
 
     if (isBadgeNotification || (isSystemSender && !isBirthdayNotification && !isChallengeNotification && !isKnowledgeBaseNotification && !isRedukcjaAlert)) {
       return (
-        <div className="w-full bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-slate-900/40 border-2 border-amber-400/70 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
+        <div id={`msg-bubble-${msg.id}`} className="w-full bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-slate-900/40 border-2 border-amber-400/70 rounded-3xl p-4 shadow-md text-slate-900 space-y-2">
           <div className="flex items-center justify-between border-b border-amber-300/40 pb-2">
             <div className="flex items-center gap-2">
               <span className="text-xl">🏆</span>
@@ -2550,7 +2800,7 @@ export default function ClubChat() {
 
     if (isChallengeNotification) {
       return (
-        <div className="w-full bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-amber-500 rounded-3xl p-4 shadow-md text-white space-y-2">
+        <div id={`msg-bubble-${msg.id}`} className="w-full bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-amber-500 rounded-3xl p-4 shadow-md text-white space-y-2">
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <div className="flex items-center gap-2">
               <span className="text-xl">⚔️</span>
@@ -2568,13 +2818,16 @@ export default function ClubChat() {
       );
     }
 
+    const isHighlighted = highlightedMessageId === msg.id;
+
     return (
       <div
+        id={`msg-bubble-${msg.id}`}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         style={{ transform: `translateX(${dragOffset}px)` }}
-        className="relative group flex flex-col transition-transform duration-75 max-w-full"
+        className={`relative group flex flex-col transition-all duration-300 max-w-full ${isHighlighted ? "scale-[1.02]" : ""}`}
       >
         {Math.abs(dragOffset) > 20 && (
           <div
@@ -2586,17 +2839,29 @@ export default function ClubChat() {
           </div>
         )}
 
+        {/* SZEROKI DYMEK WIADOMOŚCI (w-fit, max-w-[94%] – NIE ZAWINIĘTY PRZEDWCZEŚNIE) */}
         <div
-          onClick={() => setActiveMessageMenuId(activeMessageMenuId === msg.id ? null : msg.id)}
-          className={`max-w-[88%] sm:max-w-[85%] min-w-[110px] p-3 rounded-2xl ${getChatTextClass("message")} shadow-sm cursor-pointer select-none ${
+          onClick={handleBubbleClick}
+          onDoubleClick={() => handleDoubleClickMessage(msg)}
+          className={`message-item-card max-w-[94%] sm:max-w-[90%] w-fit min-w-[90px] p-3 rounded-2xl ${getChatTextClass("message")} shadow-sm cursor-pointer select-none transition-all ${
+            isHighlighted ? "ring-2 ring-amber-400 shadow-md" : ""
+          } ${
             isMe
               ? "bg-slate-900 text-white rounded-br-none ml-auto"
               : "bg-white text-slate-800 border border-slate-200 rounded-bl-none mr-auto"
           }`}
         >
+          {/* CYTAT Z MOŻLIWOŚCIĄ KLIKNIĘCIA I PRZEWINIĘCIA DO ORYGINAŁU */}
           {msg.reply_to_sender && (
             <div
-              className={`mb-1.5 p-2 rounded-xl border-l-2 text-[10px] leading-tight select-none ${
+              onClick={(e) => {
+                e.stopPropagation();
+                if (msg.reply_to_id) {
+                  scrollToMessage(msg.reply_to_id);
+                }
+              }}
+              title="Kliknij, aby przejść do tej wiadomości"
+              className={`mb-1.5 p-2 rounded-xl border-l-2 text-[10px] leading-tight select-none cursor-pointer hover:opacity-85 transition-opacity ${
                 isMe
                   ? "bg-white/10 border-amber-400 text-slate-200"
                   : "bg-slate-100 border-amber-500 text-slate-700"
@@ -2621,18 +2886,25 @@ export default function ClubChat() {
               {msg.nadawca_nazwa}
             </div>
           )}
-          {cleanDisplayContent && <div className="break-words">{cleanDisplayContent}</div>}
+          {cleanDisplayContent && <div className="break-words leading-relaxed">{cleanDisplayContent}</div>}
           {renderAttachment(msg)}
         </div>
 
+        {/* POPUP REAKCJI ZAMYKANY KLIKNIĘCIEM POZA NIM */}
         {activeMessageMenuId === msg.id && (
-          <div className={`absolute z-30 bottom-full mb-1 bg-white border border-slate-200 shadow-xl rounded-2xl p-2 flex flex-col gap-1.5 ${isMe ? "right-0" : "left-0"}`}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`message-menu-popup absolute z-30 bottom-full mb-1 bg-white border border-slate-200 shadow-xl rounded-2xl p-2 flex flex-col gap-1.5 ${isMe ? "right-0" : "left-0"}`}
+          >
             <div className="flex items-center gap-1.5 text-base px-1">
               {["👍", "❤️", "🔥", "😂", "💪"].map((emo) => (
                 <button
                   key={emo}
                   type="button"
-                  onClick={() => handleToggleReaction(msg, emo)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggleReaction(msg, emo);
+                  }}
                   className="w-7 h-7 rounded-xl bg-slate-100 hover:bg-amber-100 flex items-center justify-center transition-colors cursor-pointer"
                 >
                   {emo}
@@ -2643,7 +2915,8 @@ export default function ClubChat() {
             <div className="pt-1 border-t border-slate-100 flex flex-col gap-1">
               <button
                 type="button"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   setReplyingToMessage(msg);
                   setActiveMessageMenuId(null);
                 }}
@@ -2655,7 +2928,10 @@ export default function ClubChat() {
               {isAdmin && (
                 <button
                   type="button"
-                  onClick={() => handlePinMessage(msg)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlePinMessage(msg);
+                  }}
                   className="w-full text-left text-[11px] font-bold text-slate-800 hover:bg-amber-50 px-2 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>📌</span> {msg.przypinana ? "Odepnij treść" : "Przypnij treść"}
@@ -2676,7 +2952,10 @@ export default function ClubChat() {
                 <button
                   key={emoji}
                   type="button"
-                  onClick={() => handleToggleReaction(msg, emoji)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggleReaction(msg, emoji);
+                  }}
                   className={`text-[10px] px-2 py-0.5 rounded-full border flex items-center gap-1 transition-all cursor-pointer ${
                     hasReacted
                       ? "bg-amber-100 border-amber-400 text-amber-950 font-bold shadow-xs"
@@ -3791,7 +4070,7 @@ export default function ClubChat() {
               <div className="flex-1 overflow-y-auto pr-1 min-h-0">
                 {conversationImages.length > 0 ? (
                   <div className="grid grid-cols-3 gap-2">
-                    {conversationImages.map((imgMsg: any) => {
+                    {conversationImages.map((imgMsg: any, idx: number) => {
                       const msgDate = imgMsg.created_at
                         ? new Date(imgMsg.created_at).toLocaleDateString("pl-PL", {
                             day: "2-digit",
@@ -3801,7 +4080,7 @@ export default function ClubChat() {
 
                       return (
                         <div
-                          key={imgMsg.id}
+                          key={`${imgMsg.id || idx}-${imgMsg.attachment_url}`}
                           onClick={() => setFullscreenImage(imgMsg.attachment_url)}
                           className="relative group aspect-square rounded-xl overflow-hidden border border-slate-300 bg-slate-200 cursor-pointer shadow-sm hover:border-amber-400 transition-all"
                         >
@@ -3809,6 +4088,7 @@ export default function ClubChat() {
                             src={imgMsg.attachment_url}
                             alt={imgMsg.attachment_name || "Zdjęcie"}
                             className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-200"
+                            loading="lazy"
                           />
                           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1 text-[9px] text-white flex justify-between items-end opacity-90">
                             <span className="truncate max-w-[60px] font-medium">{imgMsg.nadawca_nazwa?.split(" ")[0]}</span>
@@ -3967,7 +4247,7 @@ export default function ClubChat() {
             </div>
           ) : (
             /* WIDOK AKTYWNEJ ROZMOWY (WIADOMOŚCI) */
-            <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 min-h-0 w-full">
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 min-h-0 w-full relative">
               {isAdmin && isCurrentChatArchived && (
                 <div className="bg-slate-200/90 border-b border-slate-300 px-3 py-1.5 flex items-center justify-between text-[11px] font-medium text-slate-700 shadow-inner shrink-0">
                   <div className="flex items-center gap-1.5 truncate">
@@ -4009,61 +4289,103 @@ export default function ClubChat() {
                 </div>
               )}
 
-              <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full">
-                {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
-                  const isMe = effectiveIds.includes(String(msg.nadawca_id));
-                  const isSpecial =
-                    Number(msg.nadawca_id) === SYSTEM_ID ||
-                    msg.nadawca_id === null ||
-                    msg.is_system ||
-                    msg.nadawca_rola === "system" ||
-                    msg.tresc?.includes("[REMINDER_5MIN_") ||
-                    msg.tresc?.includes("[REMINDER_END_OF_DAY_") ||
-                    msg.tresc?.includes("🎖️") ||
-                    msg.tresc?.includes("⚔️") ||
-                    msg.tresc?.includes("🎂") ||
-                    msg.tresc?.includes("Bazy Wiedzy");
-
-                  const messageDateTime = msg.created_at
-                    ? new Date(msg.created_at).toLocaleString("pl-PL", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })
-                    : "";
-
-                  const readTime = msg.przeczytana_at
-                    ? new Date(msg.przeczytana_at).toLocaleString("pl-PL", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })
-                    : null;
-
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`flex flex-col ${isSpecial ? "items-center w-full my-1.5" : isMe ? "items-end" : "items-start"}`}
-                    >
-                      <MessageItem msg={msg} isMe={isMe} />
-
-                      <div className="flex items-center gap-2 mt-1 px-1">
-                        <span className={`${getChatTextClass("meta")} text-slate-400 font-mono`}>{messageDateTime}</span>
-                        {isMe && !selectedGroup && (
-                          <span className={`${getChatTextClass("meta")} text-slate-400 font-medium`}>
-                            {msg.przeczytana && readTime
-                              ? `✓✓ Przeczytano: ${readTime}`
-                              : "✓ Wysłano"}
-                          </span>
-                        )}
-                      </div>
-                    </div>
+              {/* LISTA WIADOMOŚCI Z INTELIGENTNYM POZYCJONOWANIEM I SEPARATOREM NOWYCH */}
+              <div
+                ref={(el) => {
+                  messagesScrollRef.current = el;
+                  if (el && !hasScrolledToInitialPos) {
+                    const list = selectedGroup ? groupMessages : activeChatMessages;
+                    if (list.length > 0) {
+                      const firstUnread = list.find(
+                        (m: any) => !m.przeczytana && !effectiveIds.includes(String(m.nadawca_id))
+                      );
+                      if (firstUnread) {
+                        const targetEl = document.getElementById(`msg-bubble-${firstUnread.id}`);
+                        if (targetEl) {
+                          targetEl.scrollIntoView({ behavior: "auto", block: "center" });
+                          setHasScrolledToInitialPos(true);
+                          return;
+                        }
+                      }
+                      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+                      setHasScrolledToInitialPos(true);
+                    }
+                  }
+                }}
+                onScroll={handleScroll}
+                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full"
+              >
+                {(() => {
+                  const currentList = selectedGroup ? groupMessages : activeChatMessages;
+                  const firstUnreadIndex = currentList.findIndex(
+                    (m: any) => !m.przeczytana && !effectiveIds.includes(String(m.nadawca_id))
                   );
-                })}
+
+                  return currentList.map((msg: any, index: number) => {
+                    const isMe = effectiveIds.includes(String(msg.nadawca_id));
+                    const isSpecial =
+                      Number(msg.nadawca_id) === SYSTEM_ID ||
+                      msg.nadawca_id === null ||
+                      msg.is_system ||
+                      msg.nadawca_rola === "system" ||
+                      msg.tresc?.includes("[REMINDER_5MIN_") ||
+                      msg.tresc?.includes("[REMINDER_END_OF_DAY_") ||
+                      msg.tresc?.includes("🎖️") ||
+                      msg.tresc?.includes("⚔️") ||
+                      msg.tresc?.includes("🎂") ||
+                      msg.tresc?.includes("Bazy Wiedzy");
+
+                    const messageDateTime = msg.created_at
+                      ? new Date(msg.created_at).toLocaleString("pl-PL", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "";
+
+                    const readTime = msg.przeczytana_at
+                      ? new Date(msg.przeczytana_at).toLocaleString("pl-PL", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : null;
+
+                    const isFirstUnread = index === firstUnreadIndex;
+
+                    return (
+                      <React.Fragment key={msg.id}>
+                        {/* SEPARATOR DLA PIERWSZEJ NIEPRZECZYTANEJ WIADOMOŚCI */}
+                        {isFirstUnread && (
+                          <div className="w-full my-3 flex items-center gap-2 select-none">
+                            <div className="flex-1 h-px bg-amber-400/60"></div>
+                            <span className="text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 px-2.5 py-0.5 rounded-full shadow-xs">
+                              Nowe wiadomości poniżej
+                            </span>
+                            <div className="flex-1 h-px bg-amber-400/60"></div>
+                          </div>
+                        )}
+
+                        <div className={`flex flex-col ${isSpecial ? "items-center w-full my-1.5" : isMe ? "items-end" : "items-start"}`}>
+                          <MessageItem msg={msg} isMe={isMe} />
+
+                          <div className="flex items-center gap-2 mt-1 px-1">
+                            <span className={`${getChatTextClass("meta")} text-slate-400 font-mono`}>{messageDateTime}</span>
+                            {isMe && !selectedGroup && (
+                              <span className={`${getChatTextClass("meta")} text-slate-400 font-medium`}>
+                                {msg.przeczytana && readTime ? `✓✓ Przeczytano: ${readTime}` : "✓ Wysłano"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </React.Fragment>
+                    );
+                  });
+                })()}
 
                 {/* ANIMOWANY WSKAŹNIK PISANIA NA ŻYWO */}
                 {Object.keys(typingUsers).length > 0 && (
@@ -4097,6 +4419,18 @@ export default function ClubChat() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {/* PRZYCISK ZE STRZAŁKĄ W DÓŁ DO SZYBKIEGO POWROTU NA DÓŁ CZATU */}
+              {showScrollBottomBtn && (
+                <button
+                  type="button"
+                  onClick={() => scrollToBottom(true)}
+                  className="absolute right-4 bottom-20 z-20 bg-amber-400 hover:bg-amber-500 text-slate-950 p-2.5 rounded-full shadow-2xl border-2 border-slate-900 transition-all cursor-pointer flex items-center justify-center animate-bounce hover:scale-105 active:scale-95"
+                  title="Przewiń na sam koniec"
+                >
+                  <span className="text-sm font-black leading-none">⬇️</span>
+                </button>
+              )}
+
               {/* PODGLĄD ODPOWIADANIA NA WIADOMOŚĆ (SWIPE-TO-REPLY) */}
               {replyingToMessage && (
                 <div className="px-3 py-2 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-xs animate-in slide-in-from-bottom-2 select-none shrink-0 w-full">
@@ -4122,27 +4456,31 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* PODGLĄD ZAŁĄCZNIKA */}
-              {selectedFile && (
-                <div className="px-3 py-2 bg-amber-50 border-t border-amber-200 flex items-center justify-between text-xs shrink-0 w-full">
-                  <div className="flex items-center gap-2 truncate max-w-[240px] sm:max-w-[280px]">
-                    {filePreview ? (
-                      <img src={filePreview} alt="Podgląd" className="w-8 h-8 rounded object-cover border" />
-                    ) : (
-                      <span className="text-lg">📄</span>
-                    )}
-                    <span className="font-semibold text-slate-800 truncate">{selectedFile.name}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedFile(null);
-                      setFilePreview(null);
-                    }}
-                    className="text-rose-600 hover:text-rose-800 font-bold p-1 cursor-pointer"
-                  >
-                    ✕
-                  </button>
+              {/* PODGLĄD WIELU ZAŁĄCZNIKÓW PRZED WYSŁANIEM (MULTI-UPLOAD PREVIEW) */}
+              {filePreviews.length > 0 && (
+                <div className="px-3 py-2 bg-amber-50 border-t border-amber-200 flex items-center gap-2 overflow-x-auto shrink-0 w-full">
+                  {filePreviews.map((p, idx) => (
+                    <div key={idx} className="relative shrink-0 group">
+                      {p.type === "image" ? (
+                        <img src={p.url} alt={p.name} className="w-12 h-12 rounded-xl object-cover border border-amber-300 shadow-xs" />
+                      ) : (
+                        <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center text-xs font-bold border border-slate-300">
+                          📄
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSelectedFile(idx)}
+                        className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-500 hover:bg-rose-600 text-white rounded-full text-[10px] font-black flex items-center justify-center cursor-pointer shadow-sm transition-colors"
+                        title="Usuń to zdjęcie"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <span className="text-[10px] font-bold text-amber-900 ml-1 whitespace-nowrap">
+                    Wybrano: {filePreviews.length}
+                  </span>
                 </div>
               )}
 
@@ -4155,6 +4493,7 @@ export default function ClubChat() {
                   type="file"
                   ref={fileInputRef}
                   onChange={handleFileChange}
+                  multiple
                   className="hidden"
                   accept="image/*,.pdf,.doc,.docx,.xls,.xlsx"
                 />
@@ -4163,7 +4502,7 @@ export default function ClubChat() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-base sm:text-lg transition-colors cursor-pointer shrink-0"
-                  title="Dodaj załącznik"
+                  title="Dodaj zdjęcia / pliki (możesz wybrać kilka)"
                 >
                   📎
                 </button>
@@ -4189,7 +4528,7 @@ export default function ClubChat() {
 
                 <button
                   type="submit"
-                  disabled={isUploading || (!newMessage.trim() && !selectedFile)}
+                  disabled={isUploading || (!newMessage.trim() && selectedFiles.length === 0)}
                   className="bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors shadow-sm cursor-pointer shrink-0 flex items-center justify-center whitespace-nowrap"
                 >
                   {isUploading ? "..." : "Wyślij"}
@@ -4198,35 +4537,45 @@ export default function ClubChat() {
             </div>
           )}
 
+          {/* PRAWDZIWY PEŁNOEKRANOWY LIGHTBOX ZDJĘCIA (ZAKRYWA CAŁY EKRAN I DYMEK) */}
           {fullscreenImage && (
-            <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md z-[60] flex flex-col items-center justify-between p-4 animate-in fade-in">
-              <div className="w-full flex justify-between items-center text-white pb-2 border-b border-slate-800 shrink-0">
-                <span className="text-xs font-bold text-slate-300">Podgląd zdjęcia</span>
+            <div
+              onClick={() => setFullscreenImage(null)}
+              className="fixed inset-0 bg-slate-950/98 backdrop-blur-md z-[99999] flex flex-col items-center justify-between p-3 sm:p-5 animate-in fade-in select-none"
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-4xl flex justify-between items-center text-white pb-3 border-b border-slate-800 shrink-0"
+              >
+                <span className="text-xs sm:text-sm font-bold text-slate-300">Podgląd zdjęcia</span>
                 <div className="flex items-center gap-3">
                   <a
                     href={fullscreenImage}
                     target="_blank"
                     rel="noopener noreferrer"
                     download
-                    className="text-xs font-bold text-amber-400 hover:text-amber-300 bg-slate-800 px-3 py-1 rounded-lg border border-slate-700 flex items-center gap-1"
+                    className="text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 px-3 py-1.5 rounded-xl border border-amber-300 flex items-center gap-1 shadow-sm transition-all"
                   >
                     ⬇️ Pobierz
                   </a>
                   <button
                     type="button"
                     onClick={() => setFullscreenImage(null)}
-                    className="text-slate-400 hover:text-white font-black text-sm bg-slate-800 w-7 h-7 rounded-full flex items-center justify-center cursor-pointer"
+                    className="text-slate-300 hover:text-white font-black text-sm bg-slate-800 hover:bg-slate-700 w-8 h-8 rounded-full flex items-center justify-center cursor-pointer transition-colors"
                   >
                     ✕
                   </button>
                 </div>
               </div>
 
-              <div className="flex-1 flex items-center justify-center p-2 max-h-[420px] w-full min-h-0">
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="flex-1 flex items-center justify-center p-2 w-full max-w-5xl min-h-0"
+              >
                 <img
                   src={fullscreenImage}
                   alt="Pełny podgląd"
-                  className="max-h-full max-w-full object-contain rounded-xl shadow-2xl"
+                  className="max-h-[85vh] max-w-[95vw] object-contain rounded-2xl shadow-2xl"
                 />
               </div>
             </div>
@@ -4590,13 +4939,14 @@ export default function ClubChat() {
                     value={broadcastMessage}
                     onChange={(e) => setBroadcastMessage(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 focus:outline-none focus:border-amber-500"
-                    required={!selectedFile}
+                    required={selectedFiles.length === 0}
                   />
 
                   <div className="flex items-center gap-2 flex-wrap">
                     <input
                       type="file"
                       id="broadcastFile"
+                      multiple
                       onChange={handleFileChange}
                       className="hidden"
                       accept="image/*,.pdf,.doc,.docx"
@@ -4605,9 +4955,13 @@ export default function ClubChat() {
                       htmlFor="broadcastFile"
                       className="cursor-pointer px-3 py-1.5 rounded-xl border border-slate-300 bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-700 flex items-center gap-1"
                     >
-                      📎 Dodaj plik / zdjęcie
+                      📎 Dodaj pliki / zdjęcia
                     </label>
-                    {selectedFile && <span className="text-[10px] text-slate-600 truncate max-w-[150px]">{selectedFile.name}</span>}
+                    {selectedFiles.length > 0 && (
+                      <span className="text-[10px] text-slate-600 font-bold truncate max-w-[150px]">
+                        Wybrano: {selectedFiles.length}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex gap-2 pt-2">
