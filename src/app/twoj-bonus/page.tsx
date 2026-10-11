@@ -105,13 +105,12 @@ const getInstallmentsFromPass = (pass: any): number => {
   return 1;
 };
 
-// Obliczanie ile miesięcy umowy faktycznie rozpoczęło się w kalendarzu (zabezpieczenie przed płatnościami z góry)
+// Obliczanie ile miesięcy umowy faktycznie rozpoczęło się w kalendarzu (blokada przyszłych rat)
 const getContractStartedMonths = (pass: any): number => {
   if (!pass) return 1;
   const installments = getInstallmentsFromPass(pass);
   const now = new Date();
 
-  // 1. Sprawdzamy czy w obiekcie zapisano bezpośrednią datę rozpoczęcia / zakupu
   const rawStart = pass.dataRozpoczecia || pass.dataAktywacji || pass.odDnia || pass.dataZakupu || pass.created_at;
   if (rawStart) {
     const sDate = new Date(rawStart);
@@ -124,7 +123,6 @@ const getContractStartedMonths = (pass: any): number => {
     }
   }
 
-  // 2. Jeśli liczymy wstecz na podstawie waznyDo oraz liczby rat
   if (pass.waznyDo) {
     const [wY, wM, wD] = String(pass.waznyDo).split('-').map(Number);
     if (wY && wM) {
@@ -182,7 +180,7 @@ const getElapsedMonthsForPass = (pass: any): number => {
   return Math.min(totalMonths, elapsed);
 };
 
-// Wyliczanie rzeczywistej ciągłości ogólnej do rabatu lojalnościowego (NIENARUSZONE DLA RABATU)
+// Ciągłość ogólna do rabatu lojalnościowego (NIENARUSZONE DLA RABATU W SKLEPIE)
 const getClientEffectiveContinuity = (client: any): number => {
   if (!client) return 1;
   if (client.hasLostContinuity === true || client.hasLostContinuity === 'true') {
@@ -951,6 +949,7 @@ export default function TwojBonusPage() {
       localStorage.removeItem('bonus_has_notification');
       localStorage.setItem('bonus_pending_count', '0');
     } else {
+      localStorage.setItem('bonus_has_notification', 'true');
       localStorage.setItem('bonus_pending_count', String(remainingCount));
     }
 
@@ -998,9 +997,15 @@ export default function TwojBonusPage() {
     }
   }, [isMounted, appRole, currentUser, highestMemberUnlockedTier]);
 
+  // Synchronizacja wykrzyknika w menu dla Admina i Trenera
   useEffect(() => {
     if (typeof window !== 'undefined' && (appRole === 'admin' || appRole === 'trener')) {
-      if (qualifiedMembersList.length === 0) {
+      const count = qualifiedMembersList.length;
+      if (count > 0) {
+        localStorage.setItem('bonus_has_notification', 'true');
+        localStorage.setItem('bonus_pending_count', String(count));
+        window.dispatchEvent(new CustomEvent('bonus-notification-update', { detail: { count } }));
+      } else {
         localStorage.removeItem('bonus_has_notification');
         localStorage.setItem('bonus_pending_count', '0');
         window.dispatchEvent(new CustomEvent('bonus-notification-update', { detail: { count: 0 } }));
