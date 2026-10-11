@@ -938,6 +938,7 @@ export default function DashboardPage() {
       workout: list[workoutIndex]
     };
   };
+
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -1633,7 +1634,6 @@ export default function DashboardPage() {
             blokadaDo: isContractPass(k) ? endOfCurrentMonthStr : k.blokadaDo,
             powodBlokady: isContractPass(k) ? powod : k.powodBlokady
           }));
-
           await supabase.from('klienci').update({
             blokadaDo: endOfCurrentMonthStr,
             powodBlokady: powod,
@@ -2355,6 +2355,7 @@ export default function DashboardPage() {
       window.removeEventListener('storage', loadData);
     };
   }, [selectedWeekDate]);
+
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
     setModalHistoryData([]); 
@@ -2401,11 +2402,11 @@ export default function DashboardPage() {
       const keys = ['pon', 'wt', 'sr', 'czw', 'pt'];
       const dayStr = String(dayDate.getDate()).padStart(2, '0');
       const monthStr = String(dayDate.getMonth() + 1).padStart(2, '0');
-      return {
-        key: keys[index],
-        date: `${dayStr}/${monthStr}`,
-        isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`,
-        fullDate: dayDate
+      return { 
+        key: keys[index], 
+        date: `${dayStr}/${monthStr}`, 
+        isoDate: `${dayDate.getFullYear()}-${monthStr}-${dayStr}`, 
+        fullDate: dayDate 
       };
     });
 
@@ -3219,7 +3220,6 @@ export default function DashboardPage() {
       setIsBuyPassModalOpen(false);
     }
   };
-
   const handleDeleteClient = async (id: number) => {
     if (confirm("Czy na pewno chcesz całkowicie usunąć to konto?")) {
       await supabase.from('klienci').delete().eq('id', id);
@@ -3481,7 +3481,7 @@ export default function DashboardPage() {
             ? `Umowa 12M (Rata ${k.rata || '0/12'} • Ważny do: ${newExpDateStr})` 
             : `Ważny do: ${newExpDateStr}`, 
           zawieszonyOd: null, 
-          zawieszonyDo: null,
+          zawieszonyDo: null, 
           contractSuspensionDaysLeft: updatedSuspensionDaysLeft,
           totalSuspendedDaysUsed: updatedTotalSuspendedDaysUsed,
           historiaZawieszen: [historiaEntry, ...(k.historiaZawieszen || [])] 
@@ -3806,6 +3806,7 @@ export default function DashboardPage() {
     showToast(`Oznaczono nieobecność. Nałożono 3 dni blokady zapisów na ${klient.firstName} ${klient.lastName}.`);
     loadData();
   };
+
   const handleKlubowiczZapiszSie = async () => {
     if (!currentUser || !selectedClass) return;
     
@@ -3826,11 +3827,35 @@ export default function DashboardPage() {
       dzisiajDateObj.setHours(0, 0, 0, 0);
       const todayDateOnly = dzisiajDateObj.toISOString().split('T')[0];
 
-      // 2. BEZWZGLĘDNA BLOKADA PO WYGAŚNIĘCIU (BUFOR 1 DNIA NIE UPRAWNIA DO ZAPISU)
+      // PRECYZYJNE WYLICZENIE DATY WYBRANYCH ZAJĘĆ
+      const now = new Date();
+      const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
+      const lastUnderscore = classKeyStr.lastIndexOf('_');
+      const dateStr = lastUnderscore !== -1 ? classKeyStr.substring(lastUnderscore + 1) : '';
+      let d = 1, m = 1;
+      if (dateStr.includes('/')) {
+        [d, m] = dateStr.split('/').map(Number);
+      } else if (dateStr.includes('-')) {
+        const p = dateStr.split('-').map(Number);
+        m = p[1];
+        d = p[2];
+      }
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
+      const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
+      const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
+      const calcClassDateStr = `${classYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+      // 2. BEZWZGLĘDNA BLOKADA: KARNET MUSI BYĆ WAŻNY W DNIU TRENINGU (POZA UMOWĄ 12M)
+      const karnetWygasaPrzedTreningiem = karnetyUzytkownika.some((k: any) => {
+        if (!k || isContractPass(k)) return false;
+        return k.waznyDo && k.waznyDo >= todayDateOnly && k.waznyDo < calcClassDateStr;
+      });
+
       const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
-        if (isContractPass(k)) return true;
+        if (isContractPass(k)) return true; // Umowa 12M wyłączona z blokady wygaśnięcia
         if (k.waznyDo && k.waznyDo < todayDateOnly) return false;
+        if (k.waznyDo && k.waznyDo < calcClassDateStr) return false; // BLOKADA: Trening po wygaśnięciu karnetu
         if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
           if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
         }
@@ -3838,20 +3863,24 @@ export default function DashboardPage() {
       });
 
       if (karnetyUzytkownika.length === 0 || !posiadaAktywnyKarnet) {
+        const reasonMsg = karnetWygasaPrzedTreningiem
+          ? `Twój karnet wygasa przed terminem tych zajęć (Trening: ${calcClassDateStr}). Przedłuż karnet, aby zarezerwować miejsce.`
+          : "Twój karnet wygasł lub wyczerpałeś wejścia. Kup lub przedłuż karnet w zakładce Karnety.";
+
         await supabase.from('booking_logs').insert([{
           action_type: 'BOOKING_BLOCKED',
           status: 'BLOCKED',
-          reason: `${currentUser.firstName || 'Klubowicz'}: Brak aktywnego karnetu na koncie lub karnet wygasł.`,
-          rule_applied: 'no_active_pass',
-          payload: { klient_id: currentUser.id, class_id: selectedClass.id }
+          reason: `${currentUser.firstName || 'Klubowicz'}: ${reasonMsg}`,
+          rule_applied: karnetWygasaPrzedTreningiem ? 'pass_expired_before_class' : 'no_active_pass',
+          payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_date: calcClassDateStr }
         }]);
-        showToast("Nie możesz zapisać się na zajęcia! Twój karnet wygasł lub wyczerpałeś wejścia. Kup lub przedłuż karnet w zakładce Karnety.", 'error');
+        showToast(`Nie możesz zapisać się na zajęcia! ${reasonMsg}`, 'error');
         return;
       }
       
       const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
-        if (!isContractPass(k) && k.waznyDo && k.waznyDo < todayDateOnly) return false;
+        if (!isContractPass(k) && k.waznyDo && (k.waznyDo < todayDateOnly || k.waznyDo < calcClassDateStr)) return false;
         if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
           if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
         }
@@ -3879,7 +3908,6 @@ export default function DashboardPage() {
         return; 
       }
       
-      const now = new Date();
       const dzisiajData = todayStr;
 
       const clientBanDate = currentUser.blokadaDo || currentUser.blokada_do;
@@ -3898,22 +3926,6 @@ export default function DashboardPage() {
         showToast(`Nie możesz się zapisać! ${errReason}`, 'error');
         return;
       }
-
-      const classKeyStr = `${selectedClass.id}_${selectedClass.displayDate}`;
-      const lastUnderscore = classKeyStr.lastIndexOf('_');
-      const dateStr = lastUnderscore !== -1 ? classKeyStr.substring(lastUnderscore + 1) : '';
-      let d = 1, m = 1;
-      if (dateStr.includes('/')) {
-        [d, m] = dateStr.split('/').map(Number);
-      } else if (dateStr.includes('-')) {
-        const p = dateStr.split('-').map(Number);
-        m = p[1];
-        d = p[2];
-      }
-      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
-      const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
-      const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
-      const calcClassDateStr = `${classYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
       const isPassSuspended = (currentUser.karnetyKlubowicza || []).some((k: any) => {
         if (k.zawieszonyOd) {
@@ -4644,6 +4656,14 @@ export default function DashboardPage() {
         return;
       }
 
+      // SPRAWDZENIE CZY KARNET NIE WYGASA PRZED ZAJĘCIAMI
+      const passExpiresBeforeClass = !isContractPass(klient.karnetyKlubowicza?.[0]) && (klient.karnetyKlubowicza || []).some((k: any) => k.waznyDo && k.waznyDo < calcClassDateStr);
+      if (passExpiresBeforeClass) {
+        if (!confirm(`UWAGA: Karnet klienta "${klient.firstName} ${klient.lastName}" wygasa przed terminem tych zajęć (Zajęcia: ${calcClassDateStr}). Czy na pewno chcesz zapisać go mimo to jako zarządca?`)) {
+          return;
+        }
+      }
+
       const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
         if (!isContractPass(k) && k.waznyDo) {
           const expDate = new Date(k.waznyDo);
@@ -4824,7 +4844,6 @@ export default function DashboardPage() {
       loadData();
       return; 
     }
-
     let zwrocicWejscie = false;
     if (appRole === 'admin') {
       zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
@@ -6608,7 +6627,6 @@ export default function DashboardPage() {
                             )}
                           </div>
                         </div>
-
                         {/* Obsługa obecności przez Trenera / Admina */}
                         {canManageClass && (
                           <div className="flex items-center justify-end gap-2 border-t border-sky-100 pt-3 text-xs w-full">
@@ -6815,6 +6833,37 @@ export default function DashboardPage() {
                       const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
                       const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
                       
+                      // Weryfikacja czy termin treningu nie przekracza ważności karnetu
+                      const now = new Date();
+                      const todayDateOnly = now.toISOString().split('T')[0];
+                      const calcClassDateStr = selectedClass.isoDate || (() => {
+                        let d = 1, m = 1;
+                        if (selectedClass.displayDate && selectedClass.displayDate.includes('/')) {
+                          [d, m] = selectedClass.displayDate.split('/').map(Number);
+                        }
+                        const yr = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
+                        return `${yr}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                      })();
+
+                      const passExpiredBeforeClass = hasActivePass && !currentUser.karnetyKlubowicza.some((k: any) => {
+                        if (!k) return false;
+                        if (isContractPass(k)) return true;
+                        if (k.waznyDo && (k.waznyDo < todayDateOnly || k.waznyDo < calcClassDateStr)) return false;
+                        if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) <= 0) return false;
+                        return true;
+                      });
+
+                      if (appRole === 'klubowicz' && hasActivePass && passExpiredBeforeClass) {
+                        return (
+                          <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
+                            <div>⚠️ Twój karnet wygasa przed terminem tych zajęć</div>
+                            <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">
+                              Trening odbywa się {calcClassDateStr}, a Twój karnet wygasa wcześniej. Przedłuż karnet w zakładce Karnety, aby się zapisać.
+                            </div>
+                          </div>
+                        );
+                      }
+
                       if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
                         return (
                           <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
@@ -7680,7 +7729,7 @@ export default function DashboardPage() {
         <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
             <div className="flex items-center justify-between border-b border-sky-100 pb-3">
-              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚠️️ Wypisz uczestnika</h3>
+              <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">⚠ Wypisz uczestnika</h3>
               <button onClick={() => setClientToUnregister(null)} className="text-slate-400 font-bold cursor-pointer">✕</button>
             </div>
             <div className="space-y-3 text-xs text-slate-700">
