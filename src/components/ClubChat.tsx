@@ -278,7 +278,6 @@ export default function ClubChat() {
     if (hasScrolledToBottomChatIdRef.current !== currentChatId) {
       const container = messagesScrollRef.current;
       if (container && (groupMessages.length > 0 || messages.length > 0)) {
-        // Natychmiastowe ustawienie pozycji bez animacji na starcie
         container.scrollTop = container.scrollHeight;
         hasScrolledToBottomChatIdRef.current = currentChatId;
         isNearBottomRef.current = true;
@@ -719,11 +718,12 @@ export default function ClubChat() {
     return () => clearInterval(interval);
   }, [currentUserId, secondaryUserId]);
 
-  // OBSŁUGA MULTI-DEVICE PUSH (TELEFON + TABLET + KOMPUTER)
+  // OBSŁUGA MULTI-DEVICE PUSH (TELEFON + TABLET + KOMPUTER) Z OBSŁUGĄ DEEP LINKINGU
   const sendChatPushNotification = async (
     recipientId: number | string | undefined | null,
     senderName: string,
-    messageText: string
+    messageText: string,
+    customUrl?: string
   ) => {
     try {
       if (!recipientId || recipientId === "undefined" || recipientId === "null") return;
@@ -815,6 +815,7 @@ export default function ClubChat() {
       if (finalSubscriptions.length === 0) return;
 
       const previewText = messageText.length > 80 ? `${messageText.slice(0, 77)}...` : messageText;
+      const targetUrl = customUrl || (senderId ? `/?chat_user=${senderId}` : "/");
 
       await fetch("/api/push/send", {
         method: "POST",
@@ -824,7 +825,7 @@ export default function ClubChat() {
           payload: {
             title: `Wiadomość od: ${senderName}`,
             body: previewText,
-            url: "/",
+            url: targetUrl,
           },
         }),
       });
@@ -833,7 +834,7 @@ export default function ClubChat() {
     }
   };
 
-  // MULTI-DEVICE PUSH DLA CZATÓW GRUPOWYCH
+  // MULTI-DEVICE PUSH DLA CZATÓW GRUPOWYCH Z OBSŁUGĄ DEEP LINKINGU
   const sendGroupPushNotification = async (
     groupId: string,
     senderId: string,
@@ -913,6 +914,7 @@ export default function ClubChat() {
       if (finalSubscriptions.length === 0) return;
 
       const previewText = messageText.length > 80 ? `${messageText.slice(0, 77)}...` : messageText;
+      const targetUrl = `/?chat_group=${groupId}`;
 
       await fetch("/api/push/send", {
         method: "POST",
@@ -922,7 +924,7 @@ export default function ClubChat() {
           payload: {
             title: `${groupName} (${senderName})`,
             body: previewText,
-            url: "/",
+            url: targetUrl,
           },
         }),
       });
@@ -1011,6 +1013,46 @@ export default function ClubChat() {
 
     initUser();
   }, []);
+  // OBSŁUGA DEEP LINKINGU – AUTOMATYCZNE OTWIERANIE KONKRETNEGO CZATU PO KLIKNIĘCIU W POWIADOMIENIE PUSH
+  useEffect(() => {
+    if (typeof window === "undefined" || klienci.length === 0) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const chatUserId = params.get("chat_user");
+    const chatGroupId = params.get("chat_group");
+
+    if (chatGroupId && groups.length > 0) {
+      const targetGroup = groups.find((g: any) => String(g.id) === String(chatGroupId));
+      if (targetGroup) {
+        setIsOpen(true);
+        selectedGroupRef.current = targetGroup;
+        setSelectedGroup(targetGroup);
+        setSelectedUser(null);
+        selectedUserRef.current = null;
+        setChatInsideTab("messages");
+        hasScrolledToBottomChatIdRef.current = null;
+
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, "", newUrl);
+      }
+    } else if (chatUserId) {
+      const targetUser = klienci.find((k: any) => String(k.id) === String(chatUserId));
+      if (targetUser) {
+        setIsOpen(true);
+        selectedUserRef.current = targetUser;
+        setSelectedUser(targetUser);
+        setSelectedGroup(null);
+        selectedGroupRef.current = null;
+        fetchDirectMessages(targetUser);
+        setChatInsideTab("messages");
+        hasScrolledToBottomChatIdRef.current = null;
+
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, "", newUrl);
+      }
+    }
+  }, [klienci, groups]);
+
   const fetchGroupsAndTrainings = async () => {
     if (!currentUserId) return;
     try {
@@ -1590,7 +1632,7 @@ export default function ClubChat() {
     }
   };
 
-  // GŁÓWNA WYSYŁKA WIADOMOŚCI Z OBSŁUGĄ MULTI-UPLOADU I GALERII
+  // GŁÓWNA WYSYŁKA WIADOMOŚCI Z OBSŁUGĄ MULTI-UPLOADU, GALERII I DEEP LINKINGU
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && selectedFiles.length === 0) || (!selectedUser && !selectedGroup) || !currentUserId) return;
@@ -1692,7 +1734,8 @@ export default function ClubChat() {
           sendChatPushNotification(
             targetReplyAuthorId,
             currentUserName,
-            `↩ Odpowiedział(a) na Twoją wiadomość w grupie "${selectedGroup.nazwa}": "${messageText || "📎 Załącznik"}"`
+            `↩ Odpowiedział(a) na Twoją wiadomość w grupie "${selectedGroup.nazwa}": "${messageText || "📎 Załącznik"}"`,
+            `/?chat_group=${selectedGroup.id}`
           );
         }
       }
@@ -1749,7 +1792,7 @@ export default function ClubChat() {
           ? `↩ Odpowiedział(a) na Twoją wiadomość: "${messageText || "📎 Załącznik"}"`
           : messageText || (uploadedAttachments.length > 1 ? `📷 Zdjęcia (${uploadedAttachments.length})` : "📎 Załącznik");
 
-        sendChatPushNotification(selectedUser.id, currentUserName, pushBody);
+        sendChatPushNotification(selectedUser.id, currentUserName, pushBody, `/?chat_user=${senderId}`);
       }
     }
 
@@ -2123,7 +2166,8 @@ export default function ClubChat() {
           sendChatPushNotification(
             user.id,
             currentUserName,
-            broadcastMessage.trim() || (uploadedAttachments.length > 1 ? `📷 Zdjęcia (${uploadedAttachments.length})` : "📎 Załącznik")
+            broadcastMessage.trim() || (uploadedAttachments.length > 1 ? `📷 Zdjęcia (${uploadedAttachments.length})` : "📎 Załącznik"),
+            `/?chat_user=${senderId}`
           );
         });
         setBroadcastMessage("");
@@ -2324,7 +2368,11 @@ export default function ClubChat() {
 
     let rawMembers = selectedGroup.czlonkowie_ids;
     if (typeof rawMembers === "string") {
-      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
+      try {
+        rawMembers = JSON.parse(rawMembers);
+      } catch {
+        rawMembers = [];
+      }
     }
     groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
   }
