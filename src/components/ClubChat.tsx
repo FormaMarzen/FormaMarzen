@@ -266,21 +266,51 @@ export default function ClubChat() {
     setShowScrollBottomBtn((prev) => (prev !== shouldShow ? shouldShow : prev));
   };
 
-  // Jednorazowe lądowanie na samym dole przy otwarciu wątku (bez skakania i bez szukania nieprzeczytanych)
+  // Niezawodne lądowanie na samym dole przy otwarciu wątku (uwzględnia czas renderowania kart odznak w DOM)
   useEffect(() => {
     if (!isOpen || (!selectedUser && !selectedGroup)) {
       hasScrolledToBottomChatIdRef.current = null;
       return;
     }
+
     const currentChatId = selectedGroup ? `g_${selectedGroup.id}` : selectedUser ? `u_${selectedUser.id}` : null;
     if (!currentChatId) return;
 
+    // Rozdzielenie sprawdzania gotowości: Grupa sprawdza groupMessages, bezpośredni sprawdza messages
+    const isGroupChat = !!selectedGroup;
+    const hasDataReady = isGroupChat
+      ? groupMessages.length > 0
+      : messages.some((m: any) => !m.grupa_id && (String(m.nadawca_id) === String(selectedUser?.id) || String(m.odbiorca_id) === String(selectedUser?.id)));
+
     if (hasScrolledToBottomChatIdRef.current !== currentChatId) {
       const container = messagesScrollRef.current;
-      if (container && (groupMessages.length > 0 || messages.length > 0)) {
+      if (container && hasDataReady) {
+        // 1. Natychmiastowy skok na dół
         container.scrollTop = container.scrollHeight;
-        hasScrolledToBottomChatIdRef.current = currentChatId;
         isNearBottomRef.current = true;
+        setShowScrollBottomBtn(false);
+
+        // 2. Korekta po ułożeniu klatek DOM przez przeglądarkę
+        const animFrame = requestAnimationFrame(() => {
+          if (container) {
+            container.scrollTop = container.scrollHeight;
+          }
+        });
+
+        // 3. Ostateczne utrwalenie po przeliczeniu wysokości kart z odznakami
+        const timeoutId = setTimeout(() => {
+          if (container && !isUserTouchingRef.current) {
+            container.scrollTop = container.scrollHeight;
+            isNearBottomRef.current = true;
+            setShowScrollBottomBtn(false);
+            hasScrolledToBottomChatIdRef.current = currentChatId;
+          }
+        }, 120);
+
+        return () => {
+          cancelAnimationFrame(animFrame);
+          clearTimeout(timeoutId);
+        };
       }
     }
   }, [isOpen, selectedUser?.id, selectedGroup?.id, groupMessages.length, messages.length]);
@@ -1087,7 +1117,6 @@ export default function ClubChat() {
         .limit(2000);
 
       if (!error && data) {
-        // Obliczenie sygnatury danych w celu uniknięcia nadpisywania stanu przy braku zmian
         const signature = data.length > 0
           ? `${data.length}_${data[0].id}_${data[0].przeczytana ? "1" : "0"}_${data.reduce((acc, m) => acc + (m.reakcje ? Object.keys(m.reakcje).length : 0), 0)}`
           : "empty";
@@ -1296,7 +1325,6 @@ export default function ClubChat() {
               });
             }
 
-            // Przewijanie wyłącznie wtedy, gdy użytkownik jest już na samym dole i nie dotyka ekranu
             if (isNearBottomRef.current && !isUserTouchingRef.current) {
               setTimeout(() => scrollToBottom(true), 80);
             }
@@ -1440,7 +1468,6 @@ export default function ClubChat() {
           ADMIN_EMAILS.includes(selectedUser.email) ||
           selectedUser.name?.toLowerCase().includes("maciej kłaput");
 
-        // Optymistyczne zerowanie w interfejsie
         setMessages((prev) =>
           prev.map((m) => {
             if (m.grupa_id || m.przeczytana) return m;
@@ -1466,7 +1493,6 @@ export default function ClubChat() {
           })
         );
 
-        // Zapis w bazie Supabase
         try {
           if (isSys) {
             await supabase
@@ -2368,11 +2394,7 @@ export default function ClubChat() {
 
     let rawMembers = selectedGroup.czlonkowie_ids;
     if (typeof rawMembers === "string") {
-      try {
-        rawMembers = JSON.parse(rawMembers);
-      } catch {
-        rawMembers = [];
-      }
+      try { rawMembers = JSON.parse(rawMembers); } catch { rawMembers = []; }
     }
     groupMemberIds = Array.isArray(rawMembers) ? rawMembers.map(String) : [];
   }
@@ -2509,11 +2531,9 @@ export default function ClubChat() {
         return String(m.nadawca_id) === String(b.id);
       }).length;
 
-      // Priorytet dla nieprzeczytanych wiadomości
       if (unreadA > 0 && unreadB === 0) return -1;
       if (unreadB > 0 && unreadA === 0) return 1;
 
-      // Chronologia
       const timeA = latestMessageMap.get(String(a.id)) || 0;
       const timeB = latestMessageMap.get(String(b.id)) || 0;
       return timeB - timeA;
@@ -2612,7 +2632,6 @@ export default function ClubChat() {
   const renderAttachment = (msg: any) => {
     if (!msg.attachment_url) return null;
 
-    // Galeria wielu zdjęć w jednym dymku
     if (msg.attachment_type === "images_gallery") {
       let urls: string[] = [];
       try {
@@ -2644,7 +2663,6 @@ export default function ClubChat() {
       );
     }
 
-    // Pojedyncze zdjęcie z zarezerwowaną wysokością minimalną (zapobiega zerowej wysokości przed pobraniem)
     if (msg.attachment_type === "image") {
       return (
         <button
@@ -2664,7 +2682,6 @@ export default function ClubChat() {
       );
     }
 
-    // Dokument / PDF
     return (
       <a
         href={msg.attachment_url}
@@ -2727,7 +2744,6 @@ export default function ClubChat() {
       const deltaX = e.touches[0].clientX - touchStartPos.current.x;
       const deltaY = e.touches[0].clientY - touchStartPos.current.y;
 
-      // Aktywacja swipe TYLKO, gdy ruch w poziomie wyraźnie dominuje nad ruchem w pionie
       if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5 && Math.abs(deltaX) > 15) {
         isSwipingMessage.current = true;
         const bounded = Math.max(-65, Math.min(65, deltaX));
@@ -2744,7 +2760,6 @@ export default function ClubChat() {
       isSwipingMessage.current = false;
     };
 
-    // Detekcja podwójnego stuknięcia na telefonach
     const handleBubbleClick = (e: React.MouseEvent) => {
       const now = Date.now();
       if (now - lastTapTimeRef.current < 280) {
@@ -2939,7 +2954,6 @@ export default function ClubChat() {
           </div>
         )}
 
-        {/* SZEROKI DYMEK WIADOMOŚCI (w-fit, max-w-[94%] – NIE ZAWINIĘTY PRZEDWCZEŚNIE) */}
         <div
           onClick={handleBubbleClick}
           onDoubleClick={() => handleDoubleClickMessage(msg)}
@@ -2951,7 +2965,6 @@ export default function ClubChat() {
               : "bg-white text-slate-800 border border-slate-200 rounded-bl-none mr-auto"
           }`}
         >
-          {/* CYTAT Z MOŻLIWOŚCIĄ KLIKNIĘCIA I PRZEWINIĘCIA DO ORYGINAŁU */}
           {msg.reply_to_sender && (
             <div
               onClick={(e) => {
@@ -2990,7 +3003,6 @@ export default function ClubChat() {
           {renderAttachment(msg)}
         </div>
 
-        {/* POPUP REAKCJI ZAMYKANY KLIKNIĘCIEM POZA NIM */}
         {activeMessageMenuId === msg.id && (
           <div
             onClick={(e) => e.stopPropagation()}
