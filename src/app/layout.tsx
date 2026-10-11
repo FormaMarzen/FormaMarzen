@@ -129,7 +129,7 @@ const getInstallmentsFromPass = (pass: any): number => {
     }
   }
 
-  return 0;
+  return 1;
 };
 
 // Długość karnetu w miesiącach
@@ -172,7 +172,7 @@ const getElapsedMonthsForPass = (pass: any): number => {
   return Math.min(totalMonths, elapsed);
 };
 
-// Ciągłość ogólna klienta
+// Ciągłość ogólna klienta do celów rabatowych
 const getClientEffectiveContinuity = (client: any): number => {
   if (!client) return 1;
   const passes = safeJsonParse(client.karnetyKlubowicza || client.KarnetyKlubowicza || client.karnetyklubowicza, []);
@@ -383,18 +383,13 @@ export default function RootLayout({
     };
   }, [appRole, currentClientId, profileEmail]);
 
+  // Dokładne sprawdzanie powiadomień programu bonusowego bez blokad
   const checkBonusAdminNotifications = async (role: 'admin' | 'trener' | 'klubowicz', clientId?: number | string | null) => {
     if (typeof window === "undefined") return;
 
     if (role === 'klubowicz') {
       const isBonusNotif = localStorage.getItem('bonus_has_notification') === 'true';
       setHasUnreadBonus(isBonusNotif);
-      return;
-    }
-
-    const localPendingCount = localStorage.getItem('bonus_pending_count');
-    if (localPendingCount === '0') {
-      setHasUnreadBonus(false);
       return;
     }
 
@@ -466,25 +461,32 @@ export default function RootLayout({
         const passes = safeJsonParse(rawKarnety, []);
         if (!passes || passes.length === 0) continue;
 
-        const clientPass = passes[0];
+        // Pobieramy faktycznie aktywny karnet zamiast sztywnego passes[0]
+        const nonArchived = passes.filter((p: any) => p && p.status !== 'archiwalny' && p.archiwalny !== true);
+        const clientPass = nonArchived.length > 0 ? nonArchived[nonArchived.length - 1] : passes[passes.length - 1];
+        if (!clientPass) continue;
+
         const matchedTable = activeTables.find((t: any) => isPassMatchingTable(clientPass, t));
         if (!matchedTable || !matchedTable.customTiers || matchedTable.customTiers.length === 0) continue;
 
         if (clientPass.isPassChangedReset || clientPass.changedPassReset) continue;
+        if (c.hasLostContinuity === true || c.hasLostContinuity === 'true') continue;
 
         const isContract = isContractPassCheck(matchedTable) || isContractPassCheck(clientPass);
         let userVal = 1;
 
         if (isContract) {
           const installmentsCount = getInstallmentsFromPass(clientPass);
-          const effectiveContinuity = getClientEffectiveContinuity(c);
-          let finalMonths = Math.max(installmentsCount, effectiveContinuity, 1);
-          const passHistZaw = safeJsonParse(clientPass.historiaZawieszen || clientPass.historiazawieszen, []);
-          const totalSuspendedDays = passHistZaw.reduce((sum: number, hz: any) => sum + (parseInt(hz.dni || hz.planowane_dni || "0", 10) || 0), 0);
-          if (installmentsCount <= 12 && finalMonths > 12 && totalSuspendedDays > 0) {
-            finalMonths = 12;
+          let startedMonths = installmentsCount;
+          const rawStart = clientPass.dataRozpoczecia || clientPass.dataAktywacji || clientPass.odDnia || clientPass.dataZakupu || clientPass.created_at;
+          if (rawStart) {
+            const sDate = new Date(rawStart);
+            if (!isNaN(sDate.getTime())) {
+              const diffDays = Math.floor(Math.max(0, Date.now() - sDate.getTime()) / (1000 * 60 * 60 * 24));
+              startedMonths = Math.min(installmentsCount, Math.floor(diffDays / 30) + 1);
+            }
           }
-          userVal = finalMonths;
+          userVal = Math.max(1, Math.min(installmentsCount, startedMonths));
         } else {
           const pName = cleanStr(clientPass.nazwa || '');
           const tName = cleanStr(matchedTable.nazwa || '');
@@ -495,8 +497,7 @@ export default function RootLayout({
             userVal = Math.max(0, pocz - poz);
           } else {
             const elapsedMonths = getElapsedMonthsForPass(clientPass);
-            const continuity = getClientEffectiveContinuity(c);
-            userVal = Math.max(elapsedMonths, continuity, 1);
+            userVal = Math.max(elapsedMonths, 1);
           }
         }
 
@@ -516,6 +517,7 @@ export default function RootLayout({
         localStorage.removeItem('bonus_has_notification');
         localStorage.setItem('bonus_pending_count', '0');
       } else {
+        localStorage.setItem('bonus_has_notification', 'true');
         localStorage.setItem('bonus_pending_count', String(pendingCount));
       }
     } catch (e) {
@@ -526,7 +528,15 @@ export default function RootLayout({
   useEffect(() => {
     const handleBonusUpdate = (e: any) => {
       if (e?.detail && typeof e.detail.count === "number") {
-        setHasUnreadBonus(e.detail.count > 0);
+        const hasPending = e.detail.count > 0;
+        setHasUnreadBonus(hasPending);
+        if (hasPending) {
+          localStorage.setItem('bonus_has_notification', 'true');
+          localStorage.setItem('bonus_pending_count', String(e.detail.count));
+        } else {
+          localStorage.removeItem('bonus_has_notification');
+          localStorage.setItem('bonus_pending_count', '0');
+        }
       } else {
         checkBonusAdminNotifications(appRole, currentClientId);
       }
@@ -1046,7 +1056,7 @@ export default function RootLayout({
       if (redukcjeData && redukcjeData.length > 0) {
         const hasUnseenRedukcja = redukcjeData.some(r => !localStorage.getItem(`seen_challenge_${r.id}`));
 
-        // WERYFIKACJA ZAKOŃCZONEGO WYZWANIA OCZEKUJĄCEGO NA PODLICZENIE (DLA ADMINA)
+        // Weryfikacja zakończonego wyzwania oczekującego na podliczenie dla administratora
         const dzisiaj = new Date();
         dzisiaj.setHours(0, 0, 0, 0);
 
