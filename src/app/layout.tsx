@@ -105,7 +105,7 @@ const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   return false;
 };
 
-// Odczyt liczby rat z obiektu karnetu
+// Odczyt liczby opłaconych rat z obiektu karnetu
 const getInstallmentsFromPass = (pass: any): number => {
   if (!pass) return 0;
   if (pass.rata !== undefined && pass.rata !== null) {
@@ -130,6 +130,42 @@ const getInstallmentsFromPass = (pass: any): number => {
   }
 
   return 1;
+};
+
+// Obliczanie ile miesięcy umowy faktycznie rozpoczęło się w kalendarzu (blokada przyszłych rat)
+const getContractStartedMonths = (pass: any): number => {
+  if (!pass) return 1;
+  const installments = getInstallmentsFromPass(pass);
+  const now = new Date();
+
+  const rawStart = pass.dataRozpoczecia || pass.dataAktywacji || pass.odDnia || pass.dataZakupu || pass.created_at;
+  if (rawStart) {
+    const sDate = new Date(rawStart);
+    if (!isNaN(sDate.getTime())) {
+      const diffMs = now.getTime() - sDate.getTime();
+      if (diffMs <= 0) return 1;
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const monthsElapsed = Math.floor(diffDays / 30) + 1;
+      return Math.min(installments > 0 ? installments : monthsElapsed, Math.max(1, monthsElapsed));
+    }
+  }
+
+  if (pass.waznyDo) {
+    const [wY, wM, wD] = String(pass.waznyDo).split('-').map(Number);
+    if (wY && wM) {
+      const instCount = Math.max(1, installments);
+      const startMonthIndex = (wM - 1) - instCount;
+      const contractStartDate = new Date(wY, startMonthIndex, wD || 1);
+
+      const diffMs = now.getTime() - contractStartDate.getTime();
+      if (diffMs <= 0) return 1;
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const monthsElapsed = Math.floor(diffDays / 30) + 1;
+      return Math.min(instCount, Math.max(1, monthsElapsed));
+    }
+  }
+
+  return Math.max(1, installments);
 };
 
 // Długość karnetu w miesiącach
@@ -163,13 +199,28 @@ const getElapsedMonthsForPass = (pass: any): number => {
   const suspensionDays = getPassSuspensionDays(pass);
   const expDate = new Date(eY, eM - 1, eD || 1);
   const startDateMs = expDate.getTime() - (totalMonths * 30 * 24 * 60 * 60 * 1000) - (suspensionDays * 24 * 60 * 60 * 1000);
-  const startDate = new Date(startDateMs);
 
-  const activeTimeMs = Math.max(0, (now.getTime() - startDate.getTime()) - (suspensionDays * 24 * 60 * 60 * 1000));
+  const activeTimeMs = Math.max(0, (now.getTime() - startDateMs) - (suspensionDays * 24 * 60 * 60 * 1000));
   const activeDays = Math.floor(activeTimeMs / (1000 * 60 * 60 * 24));
   
   const elapsed = Math.max(1, Math.floor(activeDays / 30));
   return Math.min(totalMonths, elapsed);
+};
+
+// Pomocnik do wyciągania bieżącego aktywnego karnetu klubowicza
+const getActivePassForClient = (passes: any[]): any => {
+  if (!Array.isArray(passes) || passes.length === 0) return null;
+  const today = new Date().toISOString().split('T')[0];
+
+  const nonArchived = passes.filter(p => p && p.status !== 'archiwalny' && p.archiwalny !== true);
+  if (nonArchived.length === 0) return passes[passes.length - 1];
+
+  const validPasses = nonArchived.filter(p => !p.waznyDo || p.waznyDo >= today);
+  if (validPasses.length > 0) {
+    return validPasses[validPasses.length - 1];
+  }
+
+  return nonArchived[nonArchived.length - 1];
 };
 
 // Ciągłość ogólna klienta do celów rabatowych
@@ -383,7 +434,7 @@ export default function RootLayout({
     };
   }, [appRole, currentClientId, profileEmail]);
 
-  // Dokładne sprawdzanie powiadomień programu bonusowego bez blokad
+  // Precyzyjne sprawdzanie powiadomień programu bonusowego w 100% tożsame z page.tsx
   const checkBonusAdminNotifications = async (role: 'admin' | 'trener' | 'klubowicz', clientId?: number | string | null) => {
     if (typeof window === "undefined") return;
 
@@ -461,9 +512,8 @@ export default function RootLayout({
         const passes = safeJsonParse(rawKarnety, []);
         if (!passes || passes.length === 0) continue;
 
-        // Pobieramy faktycznie aktywny karnet zamiast sztywnego passes[0]
-        const nonArchived = passes.filter((p: any) => p && p.status !== 'archiwalny' && p.archiwalny !== true);
-        const clientPass = nonArchived.length > 0 ? nonArchived[nonArchived.length - 1] : passes[passes.length - 1];
+        // Identyczny z page.tsx wybór aktualnego karnetu
+        const clientPass = getActivePassForClient(passes);
         if (!clientPass) continue;
 
         const matchedTable = activeTables.find((t: any) => isPassMatchingTable(clientPass, t));
@@ -477,16 +527,17 @@ export default function RootLayout({
 
         if (isContract) {
           const installmentsCount = getInstallmentsFromPass(clientPass);
-          let startedMonths = installmentsCount;
-          const rawStart = clientPass.dataRozpoczecia || clientPass.dataAktywacji || clientPass.odDnia || clientPass.dataZakupu || clientPass.created_at;
-          if (rawStart) {
-            const sDate = new Date(rawStart);
-            if (!isNaN(sDate.getTime())) {
-              const diffDays = Math.floor(Math.max(0, Date.now() - sDate.getTime()) / (1000 * 60 * 60 * 24));
-              startedMonths = Math.min(installmentsCount, Math.floor(diffDays / 30) + 1);
-            }
+          const startedMonths = getContractStartedMonths(clientPass);
+          let finalMonths = Math.min(installmentsCount, startedMonths);
+          if (finalMonths < 1) finalMonths = 1;
+
+          const passHistZaw = safeJsonParse(clientPass.historiaZawieszen || clientPass.historiazawieszen, []);
+          const totalSuspendedDays = passHistZaw.reduce((sum: number, hz: any) => sum + (parseInt(hz.dni || hz.planowane_dni || '0', 10) || 0), 0);
+
+          if (installmentsCount <= 12 && finalMonths > 12 && totalSuspendedDays > 0) {
+            finalMonths = 12;
           }
-          userVal = Math.max(1, Math.min(installmentsCount, startedMonths));
+          userVal = finalMonths;
         } else {
           const pName = cleanStr(clientPass.nazwa || '');
           const tName = cleanStr(matchedTable.nazwa || '');
