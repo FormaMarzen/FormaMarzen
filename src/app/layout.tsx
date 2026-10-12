@@ -105,7 +105,7 @@ const isPassMatchingTable = (pass: any, tabela: any): boolean => {
   return false;
 };
 
-// Odczyt liczby opłaconych rat z obiektu karnetu
+// Precyzyjny odczyt liczby opłaconych rat z obiektu karnetu
 const getInstallmentsFromPass = (pass: any): number => {
   if (!pass) return 0;
   if (pass.rata !== undefined && pass.rata !== null) {
@@ -132,7 +132,7 @@ const getInstallmentsFromPass = (pass: any): number => {
   return 1;
 };
 
-// Obliczanie ile miesięcy umowy faktycznie rozpoczęło się w kalendarzu (blokada przyszłych rat)
+// Obliczanie ile miesięcy umowy faktycznie rozpoczęło się w kalendarzu (zabezpieczenie przed płatnościami z góry)
 const getContractStartedMonths = (pass: any): number => {
   if (!pass) return 1;
   const installments = getInstallmentsFromPass(pass);
@@ -292,7 +292,6 @@ export default function RootLayout({
   const [profileHeight, setProfileHeight] = useState('');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
 
-  // Dynamiczny stan liczby produktów w koszyku dla ikony w nagłówku
   const [headerCartCount, setHeaderCartCount] = useState<number>(0);
 
   const [hasUnreadInterpretation, setHasUnreadInterpretation] = useState<boolean>(false);
@@ -328,7 +327,6 @@ export default function RootLayout({
     );
   })();
 
-  // Synchronizacja liczby produktów w koszyku w czasie rzeczywistym
   const refreshCartCount = () => {
     if (typeof window === "undefined") return;
     try {
@@ -373,7 +371,6 @@ export default function RootLayout({
     };
   }, []);
 
-  // Automatyczne otwieranie koszyka po przejściu z nagłówka pod adres /sklep?koszyk=open
   useEffect(() => {
     if (pathname === '/sklep' && typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
@@ -390,7 +387,6 @@ export default function RootLayout({
     }
   }, [pathname]);
 
-  // Zerowanie powiadomienia o nowych zamówieniach w sklepie po wejściu administratora
   useEffect(() => {
     if (pathname === '/sklep' && appRole === 'admin') {
       setHasUnreadSklep(false);
@@ -405,7 +401,6 @@ export default function RootLayout({
     }
   }, [pathname, appRole]);
 
-  // Nasłuchiwanie nowych zamówień oraz aktualizacji wyzwań i badań w czasie rzeczywistym
   useEffect(() => {
     const channel = supabase
       .channel('realtime-layout-badges')
@@ -434,7 +429,6 @@ export default function RootLayout({
     };
   }, [appRole, currentClientId, profileEmail]);
 
-  // Precyzyjne sprawdzanie powiadomień programu bonusowego w 100% tożsame z page.tsx
   const checkBonusAdminNotifications = async (role: 'admin' | 'trener' | 'klubowicz', clientId?: number | string | null) => {
     if (typeof window === "undefined") return;
 
@@ -512,7 +506,6 @@ export default function RootLayout({
         const passes = safeJsonParse(rawKarnety, []);
         if (!passes || passes.length === 0) continue;
 
-        // Identyczny z page.tsx wybór aktualnego karnetu
         const clientPass = getActivePassForClient(passes);
         if (!clientPass) continue;
 
@@ -931,7 +924,6 @@ export default function RootLayout({
   const [formTelefon, setFormTelefon] = useState('');
   const [formKarnet, setFormKarnet] = useState('');
 
-  // 1. Menu Administratora
   const adminMenuSections = [
     {
       title: "Główne",
@@ -985,7 +977,6 @@ export default function RootLayout({
     }
   ];
 
-  // 2. Menu Klubowicza
   const klientMenuSections = [
     {
       title: "Główne",
@@ -1020,7 +1011,6 @@ export default function RootLayout({
     }
   ];
 
-  // 3. Menu Trenera
   const trenerMenuSections = [
     {
       title: "Strefa Trenera",
@@ -1107,7 +1097,6 @@ export default function RootLayout({
       if (redukcjeData && redukcjeData.length > 0) {
         const hasUnseenRedukcja = redukcjeData.some(r => !localStorage.getItem(`seen_challenge_${r.id}`));
 
-        // Weryfikacja zakończonego wyzwania oczekującego na podliczenie dla administratora
         const dzisiaj = new Date();
         dzisiaj.setHours(0, 0, 0, 0);
 
@@ -1287,7 +1276,6 @@ export default function RootLayout({
       }
       setHasUnreadWyzwania(unreadWyzwania);
 
-      // Weryfikacja nieodczytanych zakupów w sklepie klubowym dla administratora
       let unreadShop = false;
       if (role === 'admin') {
         const { data: unreadShopOrders, error: shopOrdersErr } = await supabase
