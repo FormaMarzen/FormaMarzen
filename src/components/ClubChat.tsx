@@ -174,12 +174,14 @@ export default function ClubChat() {
 
   const [newMessage, setNewMessage] = useState("");
 
-  // Płynny scroll bez skakania i blokad
+  // Płynny scroll i stabilizacja lądowania na dole
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const messagesContentRef = useRef<HTMLDivElement | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
   const hasScrolledToBottomChatIdRef = useRef<string | null>(null);
   const isUserTouchingRef = useRef<boolean>(false);
+  const keepPinnedToBottomRef = useRef<boolean>(true);
 
   // Zapobieganie niepotrzebnym re-renderom przy identycznych danych z pollingu
   const lastGroupMsgSignatureRef = useRef<string>("");
@@ -231,7 +233,7 @@ export default function ClubChat() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Płynne przewijanie do samego dołu wyłącznie kontenera wiadomości
+  // Płynne przewijanie do samego dołu
   const scrollToBottom = (smooth = true) => {
     const container = messagesScrollRef.current;
     if (!container) return;
@@ -244,7 +246,7 @@ export default function ClubChat() {
     setShowScrollBottomBtn(false);
   };
 
-  // Przewijanie do cytowanej wiadomości wewnątrz kontenera (bez psującego widok scrollIntoView)
+  // Przewijanie do cytowanej wiadomości wewnątrz kontenera
   const scrollToMessage = (msgId: string | number) => {
     const container = messagesScrollRef.current;
     const el = document.getElementById(`msg-bubble-${msgId}`);
@@ -256,64 +258,99 @@ export default function ClubChat() {
     }
   };
 
-  // Śledzenie przewijania użytkownika z optymalizacją pod iOS
+  // Śledzenie przewijania użytkownika
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
     const distanceToBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
     const isBottom = distanceToBottom < 80;
     isNearBottomRef.current = isBottom;
+    if (!isBottom && isUserTouchingRef.current) {
+      keepPinnedToBottomRef.current = false;
+    }
     const shouldShow = !isBottom && target.scrollHeight > target.clientHeight + 100;
     setShowScrollBottomBtn((prev) => (prev !== shouldShow ? shouldShow : prev));
   };
 
-  // Niezawodne lądowanie na samym dole przy otwarciu wątku (uwzględnia czas renderowania kart odznak w DOM)
+  // 1. NIEZAWODNE LĄDOWANIE NA SAMYM DOLE (OBSŁUGA RENDEROWANIA KART W DOM PRZEZ RESIZEOBSERVER + TIMERY)
   useEffect(() => {
     if (!isOpen || (!selectedUser && !selectedGroup)) {
       hasScrolledToBottomChatIdRef.current = null;
+      keepPinnedToBottomRef.current = false;
       return;
     }
 
     const currentChatId = selectedGroup ? `g_${selectedGroup.id}` : selectedUser ? `u_${selectedUser.id}` : null;
     if (!currentChatId) return;
 
-    // Rozdzielenie sprawdzania gotowości: Grupa sprawdza groupMessages, bezpośredni sprawdza messages
-    const isGroupChat = !!selectedGroup;
-    const hasDataReady = isGroupChat
-      ? groupMessages.length > 0
-      : messages.some((m: any) => !m.grupa_id && (String(m.nadawca_id) === String(selectedUser?.id) || String(m.odbiorca_id) === String(selectedUser?.id)));
+    keepPinnedToBottomRef.current = true;
 
-    if (hasScrolledToBottomChatIdRef.current !== currentChatId) {
-      const container = messagesScrollRef.current;
-      if (container && hasDataReady) {
-        // 1. Natychmiastowy skok na dół
-        container.scrollTop = container.scrollHeight;
-        isNearBottomRef.current = true;
-        setShowScrollBottomBtn(false);
-
-        // 2. Korekta po ułożeniu klatek DOM przez przeglądarkę
-        const animFrame = requestAnimationFrame(() => {
-          if (container) {
-            container.scrollTop = container.scrollHeight;
-          }
-        });
-
-        // 3. Ostateczne utrwalenie po przeliczeniu wysokości kart z odznakami
-        const timeoutId = setTimeout(() => {
-          if (container && !isUserTouchingRef.current) {
-            container.scrollTop = container.scrollHeight;
-            isNearBottomRef.current = true;
-            setShowScrollBottomBtn(false);
-            hasScrolledToBottomChatIdRef.current = currentChatId;
-          }
-        }, 120);
-
-        return () => {
-          cancelAnimationFrame(animFrame);
-          clearTimeout(timeoutId);
-        };
-      }
+    const container = messagesScrollRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+      isNearBottomRef.current = true;
+      setShowScrollBottomBtn(false);
     }
-  }, [isOpen, selectedUser?.id, selectedGroup?.id, groupMessages.length, messages.length]);
+
+    // Wielokrokowe dociąganie w trakcie renderowania kart z odznakami, avatarów i gradientów
+    const timer1 = setTimeout(() => {
+      if (container && keepPinnedToBottomRef.current && !isUserTouchingRef.current) {
+        container.scrollTop = container.scrollHeight;
+        setShowScrollBottomBtn(false);
+        isNearBottomRef.current = true;
+      }
+    }, 40);
+
+    const timer2 = setTimeout(() => {
+      if (container && keepPinnedToBottomRef.current && !isUserTouchingRef.current) {
+        container.scrollTop = container.scrollHeight;
+        setShowScrollBottomBtn(false);
+        isNearBottomRef.current = true;
+      }
+    }, 120);
+
+    const timer3 = setTimeout(() => {
+      if (container && keepPinnedToBottomRef.current && !isUserTouchingRef.current) {
+        container.scrollTop = container.scrollHeight;
+        setShowScrollBottomBtn(false);
+        isNearBottomRef.current = true;
+      }
+    }, 300);
+
+    const timer4 = setTimeout(() => {
+      if (container && keepPinnedToBottomRef.current && !isUserTouchingRef.current) {
+        container.scrollTop = container.scrollHeight;
+        setShowScrollBottomBtn(false);
+        isNearBottomRef.current = true;
+        hasScrolledToBottomChatIdRef.current = currentChatId;
+      }
+      keepPinnedToBottomRef.current = false;
+    }, 800);
+
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
+      clearTimeout(timer4);
+    };
+  }, [isOpen, selectedUser?.id, selectedGroup?.id]);
+
+  // Śledzenie zmian wysokości kafelków wiadomości (ResizeObserver)
+  useEffect(() => {
+    const contentEl = messagesContentRef.current;
+    const scrollEl = messagesScrollRef.current;
+    if (!contentEl || !scrollEl) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      if ((keepPinnedToBottomRef.current || isNearBottomRef.current) && !isUserTouchingRef.current) {
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+        setShowScrollBottomBtn(false);
+        isNearBottomRef.current = true;
+      }
+    });
+
+    resizeObserver.observe(contentEl);
+    return () => resizeObserver.disconnect();
+  }, [isOpen, selectedUser?.id, selectedGroup?.id, messages.length, groupMessages.length]);
 
   const getGroupMembersCount = (group: any): number => {
     if (!group) return 0;
@@ -493,6 +530,7 @@ export default function ClubChat() {
     setSelectedFiles([]);
     setFilePreviews([]);
     hasScrolledToBottomChatIdRef.current = null;
+    keepPinnedToBottomRef.current = false;
   };
 
   const handleCloseChat = () => {
@@ -513,6 +551,7 @@ export default function ClubChat() {
     setReplyingToMessage(null);
     setTypingUsers({});
     hasScrolledToBottomChatIdRef.current = null;
+    keepPinnedToBottomRef.current = false;
   };
 
   const handleMoveCategory = (index: number, direction: "up" | "down") => {
@@ -1061,6 +1100,7 @@ export default function ClubChat() {
         selectedUserRef.current = null;
         setChatInsideTab("messages");
         hasScrolledToBottomChatIdRef.current = null;
+        keepPinnedToBottomRef.current = true;
 
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
@@ -1076,6 +1116,7 @@ export default function ClubChat() {
         fetchDirectMessages(targetUser);
         setChatInsideTab("messages");
         hasScrolledToBottomChatIdRef.current = null;
+        keepPinnedToBottomRef.current = true;
 
         const newUrl = window.location.pathname;
         window.history.replaceState({}, "", newUrl);
@@ -1325,7 +1366,7 @@ export default function ClubChat() {
               });
             }
 
-            if (isNearBottomRef.current && !isUserTouchingRef.current) {
+            if ((keepPinnedToBottomRef.current || isNearBottomRef.current) && !isUserTouchingRef.current) {
               setTimeout(() => scrollToBottom(true), 80);
             }
           } else if (payload.eventType === "UPDATE") {
@@ -1418,6 +1459,7 @@ export default function ClubChat() {
   useEffect(() => {
     if (selectedGroup?.id) {
       hasScrolledToBottomChatIdRef.current = null;
+      keepPinnedToBottomRef.current = true;
       lastGroupMsgSignatureRef.current = "";
       fetchGroupMessages(selectedGroup.id);
     }
@@ -1426,6 +1468,7 @@ export default function ClubChat() {
   useEffect(() => {
     if (selectedUser?.id) {
       hasScrolledToBottomChatIdRef.current = null;
+      keepPinnedToBottomRef.current = true;
       lastDirectMsgSignatureRef.current = "";
       fetchDirectMessages(selectedUser);
     }
@@ -1746,6 +1789,7 @@ export default function ClubChat() {
         setFilePreviews([]);
         setReplyingToMessage(null);
         updateLastSeen(senderId);
+        keepPinnedToBottomRef.current = true;
         setTimeout(() => scrollToBottom(true), 60);
 
         sendGroupPushNotification(
@@ -1812,6 +1856,7 @@ export default function ClubChat() {
         setFilePreviews([]);
         setReplyingToMessage(null);
         updateLastSeen(senderId);
+        keepPinnedToBottomRef.current = true;
         setTimeout(() => scrollToBottom(true), 60);
 
         const pushBody = targetReplyAuthorId && String(targetReplyAuthorId) === String(selectedUser.id)
@@ -2476,7 +2521,7 @@ export default function ClubChat() {
     }
   });
 
-  // SORTOWANIE: NIEPRZECZYTANE NA GÓRZE, NASTĘPNIE WG CZASU OSTATNIEJ WIADOMOŚCI
+  // SORTOWANIE: NIEPRZECZYTANE ZAWSZE NA SAMEJ GÓRZE, NASTĘPNIE WG CZASU OSTATNIEJ WIADOMOŚCI
   const displayedUsers = klienci
     .filter((k: any) => !effectiveIds.includes(String(k.id)))
     .filter((k: any) => {
@@ -2540,8 +2585,28 @@ export default function ClubChat() {
     });
 
   const activeDirectUsers = displayedUsers.filter((u) => !archivedChatIds.includes(`direct_${u.id}`));
-  const pinnedDirectUsers = activeDirectUsers.filter((u) => pinnedChatIds.includes(`direct_${u.id}`));
-  const regularDirectUsers = activeDirectUsers.filter((u) => !pinnedChatIds.includes(`direct_${u.id}`));
+
+  // Podział na nieprzeczytane na samej górze, przypięte oraz pozostałe
+  const unreadDirectUsers = activeDirectUsers.filter((u) => {
+    const isSys = Number(u.id) === SYSTEM_ID;
+    const isTargetAdmin = allAdminIds.includes(String(u.id)) || ADMIN_EMAILS.includes(u.email);
+    return messages.some((m: any) => {
+      if (m.grupa_id || m.przeczytana) return false;
+      if (!effectiveIds.includes(String(m.odbiorca_id))) return false;
+      if (isSys) return m.nadawca_id === null || Number(m.nadawca_id) === SYSTEM_ID || m.nadawca_rola === "system";
+      if (isTargetAdmin) return allAdminIds.includes(String(m.nadawca_id)) || m.is_system || m.nadawca_rola === "system";
+      return String(m.nadawca_id) === String(u.id);
+    });
+  });
+
+  const pinnedDirectUsers = activeDirectUsers.filter(
+    (u) => pinnedChatIds.includes(`direct_${u.id}`) && !unreadDirectUsers.some((un) => un.id === u.id)
+  );
+
+  const regularDirectUsers = activeDirectUsers.filter(
+    (u) => !pinnedChatIds.includes(`direct_${u.id}`) && !unreadDirectUsers.some((un) => un.id === u.id)
+  );
+
   const archivedDirectUsers = isAdmin ? displayedUsers.filter((u) => archivedChatIds.includes(`direct_${u.id}`)) : [];
 
   const allMyGroups = groups.filter((g: any) => {
@@ -2564,6 +2629,10 @@ export default function ClubChat() {
   const directTabGroupChats = activeMyGroups
     .filter((g) => g.kategoria === "Czaty grupowe")
     .sort((a, b) => {
+      const unreadA = messages.filter((m: any) => String(m.grupa_id) === String(a.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana).length;
+      const unreadB = messages.filter((m: any) => String(m.grupa_id) === String(b.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana).length;
+      if (unreadA > 0 && unreadB === 0) return -1;
+      if (unreadB > 0 && unreadA === 0) return 1;
       const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
       const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
       return timeB - timeA;
@@ -2581,17 +2650,6 @@ export default function ClubChat() {
     const isForMe = effectiveIds.includes(rId);
     if (!isForMe || effectiveIds.includes(sId)) return false;
 
-    const t = m.tresc || "";
-    const isAutoNotice =
-      sId === String(SYSTEM_ID) &&
-      (t.includes("🎖️") ||
-        t.includes("⚔️") ||
-        t.includes("🎂") ||
-        t.includes("Bazy Wiedzy") ||
-        t.includes("Zapisy na TRENINGI"));
-
-    if (isAutoNotice) return false;
-
     return true;
   }).length;
 
@@ -2607,6 +2665,7 @@ export default function ClubChat() {
     (m: any) => m.grupa_id && myGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
   ).length;
 
+  // 2. ŁĄCZNY LICZNIK NIEPRZECZYTANYCH DO CZERWONEJ KROPKI NA PŁYWAJĄCYM DYMKU
   const totalUnreadCount = unreadDirect1on1Count + unreadGroupsCount;
 
   const formatLastSeen = (lastSeenString: string | null) => {
@@ -2628,7 +2687,7 @@ export default function ClubChat() {
     return `Aktywny ${diffDays} dni temu`;
   };
 
-  // RENDEROWANIE ZAŁĄCZNIKÓW Z BLOKADĄ LAYOUT SHIFT (ZAPOBIEGA SKAKANIU EKRANU W SAFARI)
+  // RENDEROWANIE ZAŁĄCZNIKÓW
   const renderAttachment = (msg: any) => {
     if (!msg.attachment_url) return null;
 
@@ -3093,6 +3152,7 @@ export default function ClubChat() {
     return <span>{iconValue}</span>;
   };
 
+  // 3. RENDER CZATU 1:1 – POGRUBIENIE, CZERWONA KROPKA I LICZNIK PRZY NOWYCH WIADOMOŚCIACH
   const renderDirectUserItem = (user: any, isPinnedItem: boolean = false) => {
     const isSys = Number(user.id) === SYSTEM_ID;
     const isTargetAdmin =
@@ -3113,13 +3173,16 @@ export default function ClubChat() {
       return String(m.nadawca_id) === String(user.id);
     }).length;
 
+    const hasUnread = userUnread > 0;
     const lastMessageText = latestMessageTextMap.get(String(user.id));
 
     return (
       <div
         key={user.id}
         className={`w-full p-2.5 rounded-2xl border flex items-center justify-between transition-all shadow-sm group ${
-          isPinnedItem
+          hasUnread
+            ? "bg-rose-50/70 border-rose-300 hover:border-rose-400 ring-1 ring-rose-200"
+            : isPinnedItem
             ? "bg-amber-50/70 border-amber-300 hover:border-amber-400"
             : isSys
             ? "bg-gradient-to-r from-amber-50 to-white border-amber-300 hover:border-amber-400"
@@ -3158,7 +3221,9 @@ export default function ClubChat() {
         >
           <div
             className={`w-9 h-9 rounded-full overflow-hidden flex items-center justify-center font-bold text-xs shrink-0 border relative ${
-              isSys
+              hasUnread
+                ? "bg-rose-100 text-rose-950 border-rose-300 shadow-sm"
+                : isSys
                 ? "bg-amber-400 text-slate-950 border-amber-300 shadow-sm"
                 : "bg-sky-100 text-sky-950 border-amber-400"
             }`}
@@ -3170,16 +3235,28 @@ export default function ClubChat() {
             ) : (
               <span>👤</span>
             )}
+            {hasUnread && (
+              <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-white animate-pulse" />
+            )}
             {isPinnedItem && (
               <span className="absolute bottom-0 right-0 text-[10px] leading-none bg-amber-400 rounded-full p-0.5 shadow">📌</span>
             )}
           </div>
           <div className="overflow-hidden flex-1 min-w-0">
-            <div className={`font-bold text-xs truncate flex items-center gap-1.5 ${isSys ? "text-amber-950 font-black" : "text-slate-900 group-hover:text-sky-950"}`}>
+            <div className={`truncate flex items-center gap-1.5 ${
+              hasUnread
+                ? "text-slate-950 font-black text-xs sm:text-[13px]"
+                : isSys
+                ? "text-amber-950 font-black text-xs"
+                : "text-slate-900 group-hover:text-sky-950 font-bold text-xs"
+            }`}>
+              {hasUnread && (
+                <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 inline-block animate-pulse" />
+              )}
               <span className="truncate">{user.name}</span>
               {isPinnedItem && <span className="text-[10px] shrink-0" title="Przypięty czat">📌</span>}
             </div>
-            <div className="text-[10px] text-slate-500 truncate mt-0.5">
+            <div className={`text-[10px] truncate mt-0.5 ${hasUnread ? "text-slate-900 font-bold" : "text-slate-500"}`}>
               {lastMessageText ? (
                 <span className="italic">{lastMessageText}</span>
               ) : (
@@ -3189,9 +3266,9 @@ export default function ClubChat() {
           </div>
         </button>
 
-        {userUnread > 0 && (
+        {hasUnread && (
           <div className="flex items-center gap-1 shrink-0 ml-2">
-            <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm">
+            <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm animate-pulse">
               {userUnread}
             </span>
           </div>
@@ -3200,19 +3277,23 @@ export default function ClubChat() {
     );
   };
 
+  // 3. RENDER GRUPY – POGRUBIENIE, CZERWONA KROPKA I LICZNIK PRZY NOWYCH WIADOMOŚCIACH
   const renderGroupItem = (group: any, isPinnedItem: boolean = false) => {
     const isPublic = group.typ === "publiczna";
     const groupUnread = messages.filter(
       (m: any) => String(m.grupa_id) === String(group.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
     ).length;
 
+    const hasUnread = groupUnread > 0;
     const count = getGroupMembersCount(group);
 
     return (
       <div
         key={group.id}
         className={`w-full p-2.5 rounded-2xl border flex items-center justify-between transition-all shadow-sm group ${
-          isPinnedItem
+          hasUnread
+            ? "bg-rose-50/70 border-rose-300 hover:border-rose-400 ring-1 ring-rose-200"
+            : isPinnedItem
             ? "bg-amber-50/70 border-amber-300 hover:border-amber-400"
             : "bg-white hover:bg-amber-50/50 border-slate-200"
         }`}
@@ -3226,14 +3307,28 @@ export default function ClubChat() {
           }}
           className="flex items-center gap-3 overflow-hidden flex-1 text-left cursor-pointer min-w-0"
         >
-          <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border overflow-hidden relative ${isPublic ? "bg-amber-100 text-amber-900 border-amber-300" : "bg-slate-100 text-slate-900 border-slate-300"}`}>
+          <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 border overflow-hidden relative ${
+            hasUnread
+              ? "bg-rose-100 text-rose-950 border-rose-300 shadow-sm"
+              : isPublic
+              ? "bg-amber-100 text-amber-900 border-amber-300"
+              : "bg-slate-100 text-slate-900 border-slate-300"
+          }`}>
             {renderGroupIcon(group.ikona, group.typ)}
+            {hasUnread && (
+              <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-white animate-pulse" />
+            )}
             {isPinnedItem && (
               <span className="absolute bottom-0 right-0 text-[10px] leading-none bg-amber-400 rounded-full p-0.5 shadow">📌</span>
             )}
           </div>
           <div className="overflow-hidden min-w-0 flex-1">
-            <div className="font-bold text-xs text-slate-900 truncate flex items-center gap-1.5">
+            <div className={`text-xs truncate flex items-center gap-1.5 ${
+              hasUnread ? "font-black text-slate-950 text-xs sm:text-[13px]" : "font-bold text-slate-900"
+            }`}>
+              {hasUnread && (
+                <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0 inline-block animate-pulse" />
+              )}
               <span className="truncate">{group.nazwa}</span>
               {isPinnedItem && <span className="text-[10px] shrink-0" title="Przypięta grupa">📌</span>}
             </div>
@@ -3247,9 +3342,9 @@ export default function ClubChat() {
           </div>
         </button>
 
-        {groupUnread > 0 && (
+        {hasUnread && (
           <div className="flex items-center gap-1 shrink-0 ml-2">
-            <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm">
+            <span className="bg-rose-500 text-white font-black text-[10px] px-2 py-0.5 rounded-full shadow-sm animate-pulse">
               {groupUnread}
             </span>
           </div>
@@ -3278,6 +3373,11 @@ export default function ClubChat() {
 
   Object.keys(myGroupsByCategory).forEach((cat) => {
     myGroupsByCategory[cat].sort((a, b) => {
+      const unreadA = messages.filter((m: any) => String(m.grupa_id) === String(a.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana).length;
+      const unreadB = messages.filter((m: any) => String(m.grupa_id) === String(b.id) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana).length;
+      if (unreadA > 0 && unreadB === 0) return -1;
+      if (unreadB > 0 && unreadA === 0) return 1;
+
       const timeA = latestGroupMessageTimeMap.get(String(a.id)) || new Date(a.created_at || 0).getTime();
       const timeB = latestGroupMessageTimeMap.get(String(b.id)) || new Date(b.created_at || 0).getTime();
       return timeB - timeA;
@@ -3816,6 +3916,19 @@ export default function ClubChat() {
                   </div>
 
                   <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 min-h-0">
+                    {/* SEKCJA: NIEPRZECZYTANE ROZMOWY NA SAMEJ GÓRZE */}
+                    {unreadDirectUsers.length > 0 && (
+                      <div className="space-y-1 mb-2">
+                        <div className="text-[10px] font-black uppercase tracking-wider text-rose-600 px-1 flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                          <span>Nieprzeczytane ({unreadDirectUsers.length})</span>
+                        </div>
+                        {unreadDirectUsers.map((user: any) =>
+                          renderDirectUserItem(user, pinnedChatIds.includes(`direct_${user.id}`))
+                        )}
+                      </div>
+                    )}
+
                     {/* SEKCJA: CZATY GRUPOWE W ZAKŁADCE PRYWATNE */}
                     {directTabGroupChats.length > 0 && (
                       <div className="space-y-1 mb-2 bg-slate-100/60 p-2 rounded-2xl border border-slate-200">
@@ -3840,7 +3953,7 @@ export default function ClubChat() {
                       </div>
                     )}
 
-                    {/* PRZYPIĘTE ROZMOWY 1-NA-1 */}
+                    {/* PRZYPIĘTE ROZMOWY 1-NA-1 (KTÓRE NIE MAJĄ NIEPRZECZYTANYCH) */}
                     {pinnedDirectUsers.length > 0 && (
                       <div className="space-y-1 mb-2">
                         <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 px-1 flex items-center gap-1">
@@ -3850,10 +3963,10 @@ export default function ClubChat() {
                       </div>
                     )}
 
-                    {/* POZOSTAŁE ROZMOWY 1-NA-1 (Z NIEPRZECZYTANYMI NA POCZĄTKU) */}
+                    {/* POZOSTAŁE ROZMOWY 1-NA-1 */}
                     {regularDirectUsers.length > 0 && (
                       <div className="space-y-1">
-                        {(pinnedDirectUsers.length > 0 || directTabGroupChats.length > 0) && (
+                        {(unreadDirectUsers.length > 0 || pinnedDirectUsers.length > 0 || directTabGroupChats.length > 0) && (
                           <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 px-1 mt-2">
                             Rozmowy prywatne
                           </div>
@@ -3925,7 +4038,6 @@ export default function ClubChat() {
                   </div>
                 </>
               )}
-
               {activeTab === "groups" && (
                 <div className="flex-1 flex flex-col overflow-hidden space-y-2 min-h-0">
                   <div className="flex items-center justify-between gap-1.5 border-b border-slate-200 pb-1.5 text-xs font-bold shrink-0">
@@ -3965,28 +4077,62 @@ export default function ClubChat() {
                   <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-0">
                     {groupFilterTab === "my" && (
                       <>
-                        {pinnedMyGroups.length > 0 && (
-                          <div className="space-y-1.5">
-                            <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 px-1 flex items-center gap-1">
-                              <span>📌</span> Przypięte grupy ({pinnedMyGroups.length})
-                            </div>
-                            {pinnedMyGroups.map((group: any) => renderGroupItem(group, true))}
-                          </div>
-                        )}
-
-                        {sortedCategoryNames.map((categoryName) => {
-                          const groupList = myGroupsByCategory[categoryName] || [];
-                          if (groupList.length === 0) return null;
+                        {(() => {
+                          const unreadGroupList = activeMyGroups.filter((g: any) =>
+                            messages.some(
+                              (m: any) =>
+                                String(m.grupa_id) === String(g.id) &&
+                                !effectiveIds.includes(String(m.nadawca_id)) &&
+                                !m.przeczytana
+                            )
+                          );
+                          const unreadIds = new Set(unreadGroupList.map((g: any) => String(g.id)));
 
                           return (
-                            <div key={categoryName} className="space-y-1.5 pt-1">
-                              <div className="text-[11px] font-bold text-slate-400 px-1 flex items-center justify-between">
-                                <span>{categoryName}</span>
-                              </div>
-                              {groupList.map((group: any) => renderGroupItem(group, false))}
-                            </div>
+                            <>
+                              {/* 3. NIEPRZECZYTANE GRUPY WYRÓŻNIONE NA SAMEJ GÓRZE */}
+                              {unreadGroupList.length > 0 && (
+                                <div className="space-y-1.5 mb-2">
+                                  <div className="text-[10px] font-black uppercase tracking-wider text-rose-600 px-1 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                                    <span>Nieprzeczytane grupy ({unreadGroupList.length})</span>
+                                  </div>
+                                  {unreadGroupList.map((group: any) =>
+                                    renderGroupItem(group, pinnedChatIds.includes(`group_${group.id}`))
+                                  )}
+                                </div>
+                              )}
+
+                              {/* PRZYPIĘTE GRUPY (KTÓRE NIE MAJĄ NOWYCH WIADOMOŚCI) */}
+                              {pinnedMyGroups.filter((g: any) => !unreadIds.has(String(g.id))).length > 0 && (
+                                <div className="space-y-1.5">
+                                  <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 px-1 flex items-center gap-1">
+                                    <span>📌</span> Przypięte grupy ({pinnedMyGroups.filter((g: any) => !unreadIds.has(String(g.id))).length})
+                                  </div>
+                                  {pinnedMyGroups
+                                    .filter((g: any) => !unreadIds.has(String(g.id)))
+                                    .map((group: any) => renderGroupItem(group, true))}
+                                </div>
+                              )}
+
+                              {/* POZOSTAŁE GRUPY WG KATEGORII */}
+                              {sortedCategoryNames.map((categoryName) => {
+                                const rawGroupList = myGroupsByCategory[categoryName] || [];
+                                const groupList = rawGroupList.filter((g: any) => !unreadIds.has(String(g.id)));
+                                if (groupList.length === 0) return null;
+
+                                return (
+                                  <div key={categoryName} className="space-y-1.5 pt-1">
+                                    <div className="text-[11px] font-bold text-slate-400 px-1 flex items-center justify-between">
+                                      <span>{categoryName}</span>
+                                    </div>
+                                    {groupList.map((group: any) => renderGroupItem(group, false))}
+                                  </div>
+                                );
+                              })}
+                            </>
                           );
-                        })}
+                        })()}
 
                         {activeMyGroups.length === 0 && archivedMyGroups.length === 0 && (
                           <div className="py-12 text-center text-slate-400 text-xs space-y-1">
@@ -4168,7 +4314,7 @@ export default function ClubChat() {
                 </div>
               )}
             </div>
-            ) : chatInsideTab === "media" ? (
+          ) : chatInsideTab === "media" ? (
             /* WIDOK GALERII ZDJĘĆ */
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-100 p-3 min-h-0">
               <div className="flex items-center justify-between pb-2 border-b border-slate-200 mb-2 shrink-0">
@@ -4399,7 +4545,7 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* LISTA WIADOMOŚCI Z BLOKADĄ SCROLL ANCHORING I ZAPASEM DOLNYM */}
+              {/* 1. LISTA WIADOMOŚCI Z OBSŁUGĄ RESIZEOBSERVER I ZAPASEM DOLNYM */}
               <div
                 ref={messagesScrollRef}
                 onScroll={handleScroll}
@@ -4409,99 +4555,101 @@ export default function ClubChat() {
                 onTouchEnd={() => {
                   isUserTouchingRef.current = false;
                 }}
-                className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0 w-full pb-16 [overflow-anchor:none]"
+                className="flex-1 overflow-y-auto p-3 sm:p-4 min-h-0 w-full pb-16 [overflow-anchor:none]"
                 style={{
                   WebkitOverflowScrolling: "touch",
                   overscrollBehaviorY: "contain",
                   overflowAnchor: "none",
                 }}
               >
-                {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
-                  const isMe = effectiveIds.includes(String(msg.nadawca_id));
-                  const isSpecial =
-                    Number(msg.nadawca_id) === SYSTEM_ID ||
-                    msg.nadawca_id === null ||
-                    msg.is_system ||
-                    msg.nadawca_rola === "system" ||
-                    msg.tresc?.includes("[REMINDER_5MIN_") ||
-                    msg.tresc?.includes("[REMINDER_END_OF_DAY_") ||
-                    msg.tresc?.includes("🎖️") ||
-                    msg.tresc?.includes("⚔️") ||
-                    msg.tresc?.includes("🎂") ||
-                    msg.tresc?.includes("Bazy Wiedzy");
+                <div ref={messagesContentRef} className="space-y-3">
+                  {(selectedGroup ? groupMessages : activeChatMessages).map((msg: any) => {
+                    const isMe = effectiveIds.includes(String(msg.nadawca_id));
+                    const isSpecial =
+                      Number(msg.nadawca_id) === SYSTEM_ID ||
+                      msg.nadawca_id === null ||
+                      msg.is_system ||
+                      msg.nadawca_rola === "system" ||
+                      msg.tresc?.includes("[REMINDER_5MIN_") ||
+                      msg.tresc?.includes("[REMINDER_END_OF_DAY_") ||
+                      msg.tresc?.includes("🎖️") ||
+                      msg.tresc?.includes("⚔️") ||
+                      msg.tresc?.includes("🎂") ||
+                      msg.tresc?.includes("Bazy Wiedzy");
 
-                  const messageDateTime = msg.created_at
-                    ? new Date(msg.created_at).toLocaleString("pl-PL", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })
-                    : "";
+                    const messageDateTime = msg.created_at
+                      ? new Date(msg.created_at).toLocaleString("pl-PL", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : "";
 
-                  const readTime = msg.przeczytana_at
-                    ? new Date(msg.przeczytana_at).toLocaleString("pl-PL", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })
-                    : null;
+                    const readTime = msg.przeczytana_at
+                      ? new Date(msg.przeczytana_at).toLocaleString("pl-PL", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })
+                      : null;
 
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`flex flex-col ${isSpecial ? "items-center w-full my-1.5" : isMe ? "items-end" : "items-start"}`}
-                    >
-                      <MessageItem msg={msg} isMe={isMe} />
+                    return (
+                      <div
+                        key={msg.id}
+                        className={`flex flex-col ${isSpecial ? "items-center w-full my-1.5" : isMe ? "items-end" : "items-start"}`}
+                      >
+                        <MessageItem msg={msg} isMe={isMe} />
 
-                      <div className="flex items-center gap-2 mt-1 px-1">
-                        <span className={`${getChatTextClass("meta")} text-slate-400 font-mono`}>{messageDateTime}</span>
-                        {isMe && !selectedGroup && (
-                          <span className={`${getChatTextClass("meta")} text-slate-400 font-medium`}>
-                            {msg.przeczytana && readTime ? `✓✓ Przeczytano: ${readTime}` : "✓ Wysłano"}
-                          </span>
-                        )}
+                        <div className="flex items-center gap-2 mt-1 px-1">
+                          <span className={`${getChatTextClass("meta")} text-slate-400 font-mono`}>{messageDateTime}</span>
+                          {isMe && !selectedGroup && (
+                            <span className={`${getChatTextClass("meta")} text-slate-400 font-medium`}>
+                              {msg.przeczytana && readTime ? `✓✓ Przeczytano: ${readTime}` : "✓ Wysłano"}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* ANIMOWANY WSKAŹNIK PISANIA NA ŻYWO */}
+                  {Object.keys(typingUsers).length > 0 && (
+                    <div className="flex items-center gap-2 text-slate-500 text-xs italic px-1 py-1 animate-in fade-in">
+                      <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-2xl shadow-xs">
+                        <span className="text-[10px] font-bold text-slate-600">
+                          {Object.values(typingUsers).map((u) => u.name.split(" ")[0]).join(", ")} pisze wiadomość
+                        </span>
+                        <div className="flex gap-1 items-center ml-1">
+                          <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                          <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                          <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce"></span>
+                        </div>
                       </div>
                     </div>
-                  );
-                })}
+                  )}
 
-                {/* ANIMOWANY WSKAŹNIK PISANIA NA ŻYWO */}
-                {Object.keys(typingUsers).length > 0 && (
-                  <div className="flex items-center gap-2 text-slate-500 text-xs italic px-1 py-1 animate-in fade-in">
-                    <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-3 py-1.5 rounded-2xl shadow-xs">
-                      <span className="text-[10px] font-bold text-slate-600">
-                        {Object.values(typingUsers).map((u) => u.name.split(" ")[0]).join(", ")} pisze wiadomość
-                      </span>
-                      <div className="flex gap-1 items-center ml-1">
-                        <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                        <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                        <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce"></span>
-                      </div>
+                  {(selectedGroup ? groupMessages : activeChatMessages).length === 0 && (
+                    <div className="py-12 text-center text-slate-400 text-xs space-y-1">
+                      <div>👋 Rozpocznij rozmowę!</div>
+                      <p className="text-[10px]">
+                        {selectedGroup
+                          ? "Napisz pierwszą wiadomość do wszystkich uczestników tej grupy."
+                          : Number(selectedUser?.id) === SYSTEM_ID
+                          ? "Tutaj pojawiać się będą oficjalne powiadomienia o odznakach, suplementach, urodzinach, wydarzeniach i obecnościach."
+                          : "Napisz pierwszą wiadomość do tego klubowicza."}
+                      </p>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {(selectedGroup ? groupMessages : activeChatMessages).length === 0 && (
-                  <div className="py-12 text-center text-slate-400 text-xs space-y-1">
-                    <div>👋 Rozpocznij rozmowę!</div>
-                    <p className="text-[10px]">
-                      {selectedGroup
-                        ? "Napisz pierwszą wiadomość do wszystkich uczestników tej grupy."
-                        : Number(selectedUser?.id) === SYSTEM_ID
-                        ? "Tutaj pojawiać się będą oficjalne powiadomienia o odznakach, suplementach, urodzinach, wydarzeniach i obecnościach."
-                        : "Napisz pierwszą wiadomość do tego klubowicza."}
-                    </p>
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} />
+                  <div ref={messagesEndRef} />
+                </div>
               </div>
 
-              {/* PŁYWAJĄCY PRZYCISK ZE STRZAŁKĄ DO SZYBKIEGO POWROTU NA SAM DÓŁ */}
+              {/* PŁYWAJĄCY PRZYCISK ZE STRZAŁKĄ DO POWROTU NA DÓŁ */}
               {showScrollBottomBtn && (
                 <button
                   type="button"
@@ -4538,7 +4686,7 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* PODGLĄD WIELU ZAŁĄCZNIKÓW PRZED WYSŁANIEM (MULTI-UPLOAD PREVIEW) */}
+              {/* PODGLĄD WIELU ZAŁĄCZNIKÓW PRZED WYSŁANIEM */}
               {filePreviews.length > 0 && (
                 <div className="px-3 py-2 bg-amber-50 border-t border-amber-200 flex items-center gap-2 overflow-x-auto shrink-0 w-full">
                   {filePreviews.map((p, idx) => (
@@ -4619,7 +4767,7 @@ export default function ClubChat() {
             </div>
           )}
 
-          {/* PRAWDZIWY PEŁNOEKRANOWY LIGHTBOX ZDJĘCIA (ZAKRYWA CAŁY EKRAN I DYMEK) */}
+          {/* PEŁNOEKRANOWY LIGHTBOX ZDJĘCIA */}
           {fullscreenImage && (
             <div
               onClick={() => setFullscreenImage(null)}
@@ -5299,7 +5447,7 @@ export default function ClubChat() {
         </div>
       )}
 
-      {/* PRZYCISK OTWARCIA CZATU (DYMEK) – WIDOCZNY WYŁĄCZNIE GDY CZAT JEST ZAMKNIĘTY */}
+      {/* 2. PŁYWAJĄCY DYMEK CZATU Z PULSUJĄCĄ CZERWONĄ KROPKĄ POWIADOMIEŃ */}
       {!isOpen && (
         <button
           type="button"
@@ -5314,8 +5462,11 @@ export default function ClubChat() {
           <span className="pointer-events-none">💬</span>
 
           {totalUnreadCount > 0 && (
-            <span className="pointer-events-none absolute -top-1 -right-1 bg-rose-500 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center shadow-md border-2 border-white animate-pulse">
-              {totalUnreadCount}
+            <span className="pointer-events-none absolute -top-1 -right-1 flex h-5 w-5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-5 w-5 bg-rose-500 text-white font-black text-[10px] items-center justify-center shadow-md border-2 border-white">
+                {totalUnreadCount}
+              </span>
             </span>
           )}
         </button>
