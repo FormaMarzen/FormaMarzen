@@ -432,7 +432,7 @@ export default function DashboardPage() {
     const allVariantKeys = getKeysVariants(classItem.id, displayDate);
     const limitZajec = classItem.limit || 12;
     
-    const pozostali = currentSignups.filter((u: any) => String(u.id) !== String(removedUserId));
+    const pozostali = currentSignups.filter((u: any) => String(u.klient_id || u.id) !== String(removedUserId));
     const listaGlowna = pozostali.filter((u: any) => u.status === 'zapisany');
     const rezerwa = pozostali.filter((u: any) => u.status === 'krzesełko');
 
@@ -451,7 +451,7 @@ export default function DashboardPage() {
 
       const posortowanaRezerwa = rezerwa.sort((a: any, b: any) => {
         if (a.created_at && b.created_at) return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-        return Number(a.id) - Number(b.id);
+        return Number(a.zapis_id || a.id) - Number(b.zapis_id || b.id);
       });
 
       let promotedUser = null;
@@ -466,9 +466,34 @@ export default function DashboardPage() {
       }
 
       if (promotedUser) {
-        await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).in('class_key', allVariantKeys).eq('klient_id', promotedUser.id);
+        const pClientId = Number(promotedUser.klient_id || promotedUser.id);
+        const pZapisId = promotedUser.zapis_id;
+
+        // Aktualizacja bezpośrednio po ID wiersza oraz jako fallback po klient_id + class_key
+        if (pZapisId) {
+          await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).eq('id', pZapisId);
+        }
+        if (promotedUser.class_key) {
+          await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).eq('class_key', promotedUser.class_key).eq('klient_id', pClientId);
+        }
+        await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).in('class_key', allVariantKeys).eq('klient_id', pClientId);
         
-        await sendPushNotification(promotedUser.id, {
+        // Natychmiastowa synchronizacja stanu pamięci podręcznej
+        setZapisyNaZajecia(prev => {
+          const updated = { ...prev };
+          allVariantKeys.forEach(vk => {
+            if (updated[vk]) {
+              updated[vk] = updated[vk].map(u => 
+                String(u.klient_id || u.id) === String(pClientId)
+                  ? { ...u, status: 'zapisany' }
+                  : u
+              );
+            }
+          });
+          return updated;
+        });
+
+        await sendPushNotification(pClientId, {
           title: `Jesteś na liście głównej: ${classItem.title}!`,
           body: `Zwolniło się miejsce! Zostałeś przeniesiony z listy rezerwowej na listę główną treningu ${classItem.title} (${displayDate} ${classItem.start}).`,
           url: '/'
@@ -480,7 +505,7 @@ export default function DashboardPage() {
         const durationText = calculateDuration(classItem.start, classItem.end);
 
         await supabase.from('transakcje').insert([{ 
-          klient_id: promotedUser.id, 
+          klient_id: pClientId, 
           typ_operacji: 'awans_z_krzesełka', 
           class_key: classKey, 
           opis: `${promotedUser.firstName || 'Klubowicz'} ${promotedUser.lastName || ''} - Automatyczny awans z listy rezerwowej na listę główną: ${classItem.title} (${formattedFullDate} ${classItem.start}-${classItem.end || ''}, ${durationText}). Status: ✅ Lista główna.` 
@@ -489,9 +514,9 @@ export default function DashboardPage() {
         await supabase.from('booking_logs').insert([{
           action_type: 'WAITLIST_PROMOTION',
           status: 'SUCCESS',
-          reason: `Klubowicz ID:${promotedUser.id} awansowany na listę główną w ${classKey}`,
+          reason: `Klubowicz ID:${pClientId} awansowany na listę główną w ${classKey}`,
           rule_applied: 'waitlist_auto_promotion',
-          payload: { klient_id: promotedUser.id, class_key: classKey }
+          payload: { klient_id: pClientId, class_key: classKey, zapis_id: pZapisId }
         }]);
       }
     }
@@ -938,7 +963,6 @@ export default function DashboardPage() {
       workout: list[workoutIndex]
     };
   };
-
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -995,9 +1019,9 @@ export default function DashboardPage() {
               .from('zapisy_zajec')
               .delete()
               .in('class_key', keysToDelete)
-              .eq('klient_id', Number(wMember.id));
+              .eq('klient_id', Number(wMember.klient_id || wMember.id));
 
-            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', wMember.id).maybeSingle();
+            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', wMember.klient_id || wMember.id).maybeSingle();
             if (clientData) {
               let parsedKarnety = [];
               if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
@@ -1013,7 +1037,7 @@ export default function DashboardPage() {
                   pozostaloWejsc: currentRemaining + 1,
                   zeroEntriesGraceUntil: null
                 };
-                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', wMember.id);
+                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', wMember.klient_id || wMember.id);
               }
 
               const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
@@ -1022,14 +1046,14 @@ export default function DashboardPage() {
               const durationText = calculateDuration(cls.start, cls.end);
 
               await supabase.from('transakcje').insert([{
-                klient_id: wMember.id,
+                klient_id: wMember.klient_id || wMember.id,
                 typ_operacji: 'zajecia_wypis',
                 class_key: cls.classKey,
                 opis: `Automatyczne zwolnienie z krzesełka: ${cls.title} (${formattedDate} ${cls.start}-${cls.end || ''}, ${durationText}) - upłynął wybrany czas gotowości (${cutoffMin} min przed startem). Zwrócono 1 wejście.`
               }]);
             }
 
-            await sendPushNotification(wMember.id, {
+            await sendPushNotification(wMember.klient_id || wMember.id, {
               title: `Zwolniono miejsce na liście rezerwowej: ${cls.title}`,
               body: `Zostałeś automatycznie wypisany z listy rezerwowej treningu ${cls.title} (${col.date} ${cls.start}), ponieważ do zajęć zostało mniej niż ${cutoffMin} min. Zwrócono wejście.`,
               url: '/'
@@ -1038,9 +1062,9 @@ export default function DashboardPage() {
             await supabase.from('booking_logs').insert([{
               action_type: 'WAITLIST_CUTOFF_EXPIRED',
               status: 'SUCCESS',
-              reason: `Klubowicz ID:${wMember.id} usunięty z listy rezerwowej ${cls.classKey} (upłynął limit ${cutoffMin} min).`,
+              reason: `Klubowicz ID:${wMember.klient_id || wMember.id} usunięty z listy rezerwowej ${cls.classKey} (upłynął limit ${cutoffMin} min).`,
               rule_applied: 'waitlist_cutoff_auto_removal',
-              payload: { class_key: cls.classKey, klient_id: wMember.id, cutoff_minutes: cutoffMin }
+              payload: { class_key: cls.classKey, klient_id: wMember.klient_id || wMember.id, cutoff_minutes: cutoffMin }
             }]);
           }
         }
@@ -1048,6 +1072,111 @@ export default function DashboardPage() {
     }
 
     return hasChanges;
+  };
+
+  // SAMOCZYNNE UZGADNIANIE WOLNYCH MIEJSC I AWANS Z LISTY REZERWOWEJ
+  const processWaitlistPromotions = async (
+    classes: any[],
+    jednorazowe: any[],
+    signupsMap: { [key: string]: any[] },
+    overridesMap: { [key: string]: any },
+    days: any[]
+  ) => {
+    const now = new Date();
+    let hasPromotions = false;
+
+    for (const col of days) {
+      const stdDnia = classes
+        .filter((item: any) => item.days && item.days[col.key])
+        .map((item: any) => {
+          const classKey = `${item.id}_${col.date}`;
+          const override = overridesMap[classKey];
+          return override ? { ...item, ...override, classKey } : { ...item, classKey };
+        });
+
+      const jednorazDnia = jednorazowe
+        .filter((item: any) => item.displayDate === col.date)
+        .map((item: any) => {
+          const classKey = `${item.id}_${col.date}`;
+          const override = overridesMap[classKey];
+          return override ? { ...item, ...override, classKey } : { ...item, classKey };
+        });
+
+      const allClasses = [...stdDnia, ...jednorazDnia];
+
+      for (const cls of allClasses) {
+        if (cls.isOdwołane || cls.isUsunięte) continue;
+
+        const classSignups = signupsMap[cls.classKey] || [];
+        const listaGlowna = classSignups.filter((s: any) => s.status === 'zapisany');
+        const rezerwa = classSignups.filter((s: any) => s.status === 'krzesełko');
+        const limitZajec = cls.limit || 12;
+
+        if (listaGlowna.length < limitZajec && rezerwa.length > 0) {
+          const [dStr, mStr] = col.date.split('/');
+          const classYear = col.fullDate ? col.fullDate.getFullYear() : now.getFullYear();
+          const [sh = '00', sm = '00'] = (cls.start || '00:00').split(':');
+          const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
+          const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
+
+          const posortowanaRezerwa = [...rezerwa].sort((a: any, b: any) => {
+            if (a.created_at && b.created_at) return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+            return Number(a.zapis_id || a.id) - Number(b.zapis_id || b.id);
+          });
+
+          const wolneMiejsca = limitZajec - listaGlowna.length;
+          const kandydaciDoAwansu = posortowanaRezerwa.slice(0, wolneMiejsca);
+
+          for (const promotedUser of kandydaciDoAwansu) {
+            const cutoffMin = promotedUser.waitlist_cutoff_minutes !== undefined && promotedUser.waitlist_cutoff_minutes !== null 
+              ? Number(promotedUser.waitlist_cutoff_minutes) 
+              : 30;
+
+            if (diffMinutes > cutoffMin) {
+              hasPromotions = true;
+              const pClientId = Number(promotedUser.klient_id || promotedUser.id);
+              const pZapisId = promotedUser.zapis_id;
+              const allVariantKeys = getKeysVariants(cls.id, col.date);
+
+              if (pZapisId) {
+                await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).eq('id', pZapisId);
+              }
+              await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).in('class_key', allVariantKeys).eq('klient_id', pClientId);
+
+              promotedUser.status = 'zapisany';
+
+              await sendPushNotification(pClientId, {
+                title: `Jesteś na liście głównej: ${cls.title}!`,
+                body: `Zwolniło się miejsce! Zostałeś przeniesiony z listy rezerwowej na listę główną treningu ${cls.title} (${col.date} ${cls.start}).`,
+                url: '/'
+              });
+
+              const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+              const dayOfWeekName = dayNames[classStartDateTime.getDay()];
+              const formattedFullDate = `${dayOfWeekName}, ${col.date}.${classYear}`;
+              const durationText = calculateDuration(cls.start, cls.end);
+
+              await supabase.from('transakcje').insert([{ 
+                klient_id: pClientId, 
+                typ_operacji: 'awans_z_krzesełka', 
+                class_key: cls.classKey, 
+                opis: `${promotedUser.firstName || 'Klubowicz'} ${promotedUser.lastName || ''} - Automatyczny awans z listy rezerwowej na listę główną: ${cls.title} (${formattedFullDate} ${cls.start}-${cls.end || ''}, ${durationText}). Status: ✅ Lista główna.` 
+              }]);
+              
+              await supabase.from('booking_logs').insert([{
+                action_type: 'WAITLIST_PROMOTION',
+                status: 'SUCCESS',
+                reason: `Klubowicz ID:${pClientId} awansowany automatycznie w tle na listę główną w ${cls.classKey}`,
+                rule_applied: 'waitlist_background_promotion',
+                payload: { klient_id: pClientId, class_key: cls.classKey, zapis_id: pZapisId }
+              }]);
+            }
+          }
+        }
+      }
+    }
+
+    return hasPromotions;
   };
 
   const processAutoCancellations = async (
@@ -1081,7 +1210,7 @@ export default function DashboardPage() {
       const allClasses = [...stdDnia, ...jednorazDnia];
 
       for (const cls of allClasses) {
-        // ZABEZPIECZENIE: Ręcznie przywrócone zajęcia mają blokadę ponownego automatycznego odwoływania
+        // ZABEZPIECZENIE: Ręcznie odwołane lub ręcznie przywrócone zajęcia
         if (cls.isOdwołane || cls.isUsunięte || cls.prevent_auto_cancel || cls.manual_restore) continue;
 
         const trainingName = (cls.title || '').trim();
@@ -1131,9 +1260,8 @@ export default function DashboardPage() {
                   trainer: cls.trainer,
                   limit: cls.limit,
                   is_odwolane: true,
-                  is_usuniete: false,
-                  prevent_auto_cancel: false
-                });
+                  is_usuniete: false
+                }, { onConflict: 'class_key' });
               }
 
               const participantIds: number[] = [];
@@ -1143,8 +1271,8 @@ export default function DashboardPage() {
               const durationText = calculateDuration(cls.start, cls.end);
 
               for (const participant of classSignups) {
-                participantIds.push(participant.klient_id || participant.id);
                 const pId = participant.klient_id || participant.id;
+                participantIds.push(pId);
                 const { data: clientData } = await supabase.from('klienci').select('*').eq('id', pId).maybeSingle();
                 if (clientData) {
                   let parsedKarnety = [];
@@ -1263,9 +1391,8 @@ export default function DashboardPage() {
               trainer: classItem.trainer,
               limit: classItem.limit || 12,
               is_odwolane: true,
-              is_usuniete: false,
-              prevent_auto_cancel: false
-            });
+              is_usuniete: false
+            }, { onConflict: 'class_key' });
           }
 
           const participantIds: number[] = [];
@@ -1634,6 +1761,7 @@ export default function DashboardPage() {
             blokadaDo: isContractPass(k) ? endOfCurrentMonthStr : k.blokadaDo,
             powodBlokady: isContractPass(k) ? powod : k.powodBlokady
           }));
+
           await supabase.from('klienci').update({
             blokadaDo: endOfCurrentMonthStr,
             powodBlokady: powod,
@@ -1838,6 +1966,12 @@ export default function DashboardPage() {
                 k.pozostaloWejsc = isNaN(valWejsc) ? null : valWejsc;
                 k.poczatkoweWejsc = isNaN(valWejsc) ? null : valWejsc;
               }
+            }
+
+            // Automatyczna aktualizacja etykiety karnetu oczekującego po wejściu w okres ważności
+            if (k.statusTekst?.includes('Oczekujący') && k.waznyOd && k.waznyOd <= todayDateOnly) {
+              k.statusTekst = `Ważny do: ${k.waznyDo}`;
+              karnetyZmienione = true;
             }
 
             const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
@@ -2188,8 +2322,8 @@ export default function DashboardPage() {
             limit: n.limit, 
             isOdwołane: n.is_odwolane, 
             isUsunięte: n.is_usuniete,
-            prevent_auto_cancel: n.prevent_auto_cancel || n.manual_restore || false,
-            manual_restore: n.prevent_auto_cancel || n.manual_restore || false
+            prevent_auto_cancel: n.is_odwolane === false,
+            manual_restore: n.is_odwolane === false
           };
           nadpisaniaMap[n.class_key] = itemVal;
           if (n.class_key && n.class_key.includes('_')) {
@@ -2214,6 +2348,7 @@ export default function DashboardPage() {
         sortedZapisy.forEach((z: any) => {
           const entry = {
             ...z,
+            zapis_id: z.id,
             id: z.klient_id,
             status: z.status || 'zapisany',
             waitlist_cutoff_minutes: z.waitlist_cutoff_minutes !== undefined && z.waitlist_cutoff_minutes !== null ? Number(z.waitlist_cutoff_minutes) : 30,
@@ -2224,7 +2359,7 @@ export default function DashboardPage() {
           if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
           groupedZapisy[z.class_key].push(entry);
 
-          // POPRAWKA: Używamy lastIndexOf('_') do poprawnego wydobycia ID zajęć jednorazowych (np. j_15)
+          // Poprawne generowanie wariantów kluczy dla jednorazowych i standardowych
           if (z.class_key && z.class_key.includes('_')) {
             const lastUnderscore = z.class_key.lastIndexOf('_');
             const classId = z.class_key.substring(0, lastUnderscore);
@@ -2259,6 +2394,14 @@ export default function DashboardPage() {
       });
 
       await processWaitlistCutoffs(
+        mappedSzablony,
+        mappedJednorazowe,
+        groupedZapisy,
+        nadpisaniaMap,
+        activeDashboardDays
+      );
+
+      await processWaitlistPromotions(
         mappedSzablony,
         mappedJednorazowe,
         groupedZapisy,
@@ -2510,9 +2653,8 @@ export default function DashboardPage() {
         trainer: editTrainer,
         limit: newLimitNum,
         is_odwolane: editClassModalData.isOdwołane || false,
-        is_usuniete: editClassModalData.isUsunięte || false,
-        prevent_auto_cancel: editClassModalData.prevent_auto_cancel || false
-      });
+        is_usuniete: editClassModalData.isUsunięte || false
+      }, { onConflict: 'class_key' });
     }
 
     const durationText = calculateDuration(newStart, newEnd);
@@ -2573,7 +2715,7 @@ export default function DashboardPage() {
 
     const { data: dbSignups } = await supabase
       .from('zapisy_zajec')
-      .select('klient_id, status')
+      .select('id, klient_id, status')
       .in('class_key', allVariantKeys);
 
     const zapisani = dbSignups || [];
@@ -2642,12 +2784,11 @@ export default function DashboardPage() {
         trainer: item.trainer || '',
         limit: item.limit || 12,
         is_odwolane: true,
-        is_usuniete: item.isUsunięte || false,
-        prevent_auto_cancel: false
+        is_usuniete: item.isUsunięte || false
       }));
-      await supabase.from('nadpisania_zajec').insert(rowsToInsert);
+      await supabase.from('nadpisania_zajec').upsert(rowsToInsert, { onConflict: 'class_key' });
     } else {
-      // PRZYWRÓCENIE ZAJĘĆ (WYMÓG 1): Trwałe zabezpieczenie przed ponownym autoodwołaniem
+      // PRZYWRÓCENIE ZAJĘĆ
       const rowsToInsert = allVariantKeys.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
@@ -2655,11 +2796,9 @@ export default function DashboardPage() {
         trainer: item.trainer || '',
         limit: item.limit || 12,
         is_odwolane: false,
-        is_usuniete: item.isUsunięte || false,
-        prevent_auto_cancel: true,
-        manual_restore: true
+        is_usuniete: item.isUsunięte || false
       }));
-      await supabase.from('nadpisania_zajec').insert(rowsToInsert);
+      await supabase.from('nadpisania_zajec').upsert(rowsToInsert, { onConflict: 'class_key' });
     }
 
     setNadpisaneZajeciaDni(prev => {
@@ -2683,7 +2822,7 @@ export default function DashboardPage() {
     }]);
 
     await loadData();
-    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone i zabezpieczone przed autoodwołaniem!");
+    showToast(nextOdwołaneState ? "Zajęcia zostały odwołane." : "Zajęcia zostały pomyślnie przywrócone!");
   };
 
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
@@ -2755,7 +2894,7 @@ export default function DashboardPage() {
           is_odwolane: item.isOdwołane || false,
           is_usuniete: true
         }));
-        await supabase.from('nadpisania_zajec').insert(rowsToInsert);
+        await supabase.from('nadpisania_zajec').upsert(rowsToInsert, { onConflict: 'class_key' });
       }
     }
 
@@ -3047,7 +3186,7 @@ export default function DashboardPage() {
     const basePriceNum = defKarnetu ? parseFloat(defKarnetu.cena) : 0;
     
     const effectiveDiscount = getEffectiveDiscount(currentUser, isContract, basePriceNum);
-    const cenaWartosc = (effectiveDiscount.percent > 0 && !isContract && basePriceNum > 150)
+    const cenaWartosc = (effectiveDiscount.percent > 0 && !isContract && basePriceNum > 150) 
       ? basePriceNum * (1 - effectiveDiscount.percent / 100) 
       : basePriceNum;
     const cenaStr = `${cenaWartosc.toFixed(2)} PLN`;
@@ -3363,7 +3502,7 @@ export default function DashboardPage() {
 
     let updatedNadchodzace = profileClient.zapisyNadchodzace;
     if (typeof updatedNadchodzace === 'string') {
-      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) {}
     }
     if (Array.isArray(updatedNadchodzace)) {
       updatedNadchodzace = updatedNadchodzace.filter((z: any) => {
@@ -3678,7 +3817,7 @@ export default function DashboardPage() {
           );
 
           if (classStartDateTime >= now) {
-            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klientId))) {
+            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.klient_id || u.id) === String(klientId))) {
               count++;
               countedIsoKeys.add(uniqueKey);
             }
@@ -3694,7 +3833,7 @@ export default function DashboardPage() {
     if (!selectedClass) return;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const aktualni = zapisyNaZajecia[`${selectedClass.id}_${selectedClass.displayDate}`] || [];
-    const szukany = aktualni.find(k => k.id === klientId);
+    const szukany = aktualni.find(k => String(k.klient_id || k.id) === String(klientId));
     if (!szukany) return;
     const nowyStanObecny = !szukany.obecny;
 
@@ -3703,13 +3842,16 @@ export default function DashboardPage() {
       keys.forEach(k => {
         if (updated[k]) {
           updated[k] = updated[k].map(item => 
-            item.id === klientId ? { ...item, obecny: nowyStanObecny, nieobecny: false } : item
+            String(item.klient_id || item.id) === String(klientId) ? { ...item, obecny: nowyStanObecny, nieobecny: false } : item
           );
         }
       });
       return updated;
     });
 
+    if (szukany.zapis_id) {
+      await supabase.from('zapisy_zajec').update({ obecny: nowyStanObecny, nieobecny: false }).eq('id', szukany.zapis_id);
+    }
     await supabase
       .from('zapisy_zajec')
       .update({ obecny: nowyStanObecny, nieobecny: false })
@@ -3728,12 +3870,15 @@ export default function DashboardPage() {
         keys.forEach(k => {
           if (updated[k]) {
             updated[k] = updated[k].map(item => 
-              item.id === klient.id ? { ...item, nieobecny: false, obecny: false } : item
+              String(item.klient_id || item.id) === String(klient.id) ? { ...item, nieobecny: false, obecny: false } : item
             );
           }
         });
         return updated;
       });
+      if (osobaZapisana.zapis_id) {
+        await supabase.from('zapisy_zajec').update({ nieobecny: false, obecny: false }).eq('id', osobaZapisana.zapis_id);
+      }
       await supabase.from('zapisy_zajec').update({ nieobecny: false, obecny: false }).in('class_key', keys).eq('klient_id', klient.id);
       loadData();
     } else {
@@ -3757,13 +3902,16 @@ export default function DashboardPage() {
       keys.forEach(k => {
         if (updated[k]) {
           updated[k] = updated[k].map(item => 
-            item.id === klient.id ? { ...item, obecny: false, nieobecny: true } : item
+            String(item.klient_id || item.id) === String(klient.id) ? { ...item, obecny: false, nieobecny: true } : item
           );
         }
       });
       return updated;
     });
 
+    if (osobaZapisana.zapis_id) {
+      await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).eq('id', osobaZapisana.zapis_id);
+    }
     await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).in('class_key', keys).eq('klient_id', klient.id);
 
     const dni = 3;
@@ -4032,7 +4180,7 @@ export default function DashboardPage() {
           const cTitle = (c.title || '').trim().toLowerCase();
           const sTitle = (selectedClass.title || '').trim().toLowerCase();
           if (cTitle === sTitle && zapisyNaZajecia[cKey]) {
-            if (zapisyNaZajecia[cKey].some((u: any) => String(u.id) === String(currentUser.id))) {
+            if (zapisyNaZajecia[cKey].some((u: any) => String(u.klient_id || u.id) === String(currentUser.id))) {
               sameTypeCount++;
             }
           }
@@ -4078,7 +4226,7 @@ export default function DashboardPage() {
           const classId = lastUnderscore !== -1 ? cKey.substring(0, lastUnderscore) : cKey;
           const normalizedKey = `${classId}_${selectedClass.displayDate}`;
           if (!countedDayClassKeys.has(normalizedKey)) {
-            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(currentUser.id))) {
+            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.klient_id || u.id) === String(currentUser.id))) {
               userSignupsOnThisDate++;
               countedDayClassKeys.add(normalizedKey);
             }
@@ -4111,7 +4259,18 @@ export default function DashboardPage() {
       
       if (!confirm("Czy na pewno chcesz zapisać się na te zajęcia?")) return;
 
+      const { data: insertedSignup, error } = await supabase.from('zapisy_zajec').insert([
+        { class_key: classKey, klient_id: currentUser.id, status: 'zapisany', waitlist_cutoff_minutes: null, obecny: false }
+      ]).select('id').maybeSingle();
+      
+      if (error) { 
+        showToast(`Nie udało się zapisać na zajęcia: ${error.message}`, 'error'); 
+        loadData();
+        return; 
+      }
+
       const newEntry = {
+        zapis_id: insertedSignup?.id,
         id: currentUser.id,
         klient_id: currentUser.id,
         firstName: currentUser.firstName,
@@ -4126,22 +4285,12 @@ export default function DashboardPage() {
         const updated = { ...prev };
         allVariantKeys.forEach(vk => {
           if (!updated[vk]) updated[vk] = [];
-          if (!updated[vk].some((item: any) => item.id === currentUser.id)) {
+          if (!updated[vk].some((item: any) => String(item.klient_id || item.id) === String(currentUser.id))) {
             updated[vk] = [...updated[vk], newEntry];
           }
         });
         return updated;
       });
-
-      const { error } = await supabase.from('zapisy_zajec').insert([
-        { class_key: classKey, klient_id: currentUser.id, status: 'zapisany', waitlist_cutoff_minutes: null, obecny: false }
-      ]);
-      
-      if (error) { 
-        showToast(`Nie udało się zapisać na zajęcia: ${error.message}`, 'error'); 
-        loadData();
-        return; 
-      }
 
       let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
@@ -4232,7 +4381,18 @@ export default function DashboardPage() {
 
       const aktualni = zapisyNaZajecia[classKey] || [];
 
+      const { data: insertedWaitlist, error } = await supabase.from('zapisy_zajec').insert([
+        { class_key: classKey, klient_id: currentUser.id, status: 'krzesełko', waitlist_cutoff_minutes: cutoffMinutes, obecny: false }
+      ]).select('id').maybeSingle();
+
+      if (error) {
+        showToast(`Nie udało się zapisać na listę rezerwową: ${error.message}`, 'error');
+        loadData();
+        return;
+      }
+
       const waitlistEntry = {
+        zapis_id: insertedWaitlist?.id,
         id: currentUser.id,
         klient_id: currentUser.id,
         firstName: currentUser.firstName,
@@ -4247,22 +4407,12 @@ export default function DashboardPage() {
         const updated = { ...prev };
         allVariantKeys.forEach(vk => {
           if (!updated[vk]) updated[vk] = [];
-          if (!updated[vk].some((item: any) => item.id === currentUser.id)) {
+          if (!updated[vk].some((item: any) => String(item.klient_id || item.id) === String(currentUser.id))) {
             updated[vk] = [...updated[vk], waitlistEntry];
           }
         });
         return updated;
       });
-
-      const { error } = await supabase.from('zapisy_zajec').insert([
-        { class_key: classKey, klient_id: currentUser.id, status: 'krzesełko', waitlist_cutoff_minutes: cutoffMinutes, obecny: false }
-      ]);
-
-      if (error) {
-        showToast(`Nie udało się zapisać na listę rezerwową: ${error.message}`, 'error');
-        loadData();
-        return;
-      }
 
       let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
       const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
@@ -4343,11 +4493,15 @@ export default function DashboardPage() {
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    
+    if (editWaitlistTarget.zapis_id) {
+      await supabase.from('zapisy_zajec').update({ waitlist_cutoff_minutes: newCutoff }).eq('id', editWaitlistTarget.zapis_id);
+    }
     const { error } = await supabase
       .from('zapisy_zajec')
       .update({ waitlist_cutoff_minutes: newCutoff })
       .in('class_key', keys)
-      .eq('klient_id', editWaitlistTarget.id);
+      .eq('klient_id', editWaitlistTarget.klient_id || editWaitlistTarget.id);
 
     if (error) { 
       showToast(`Nie udało się zaktualizować czasu wypisu: ${error.message}`, 'error'); 
@@ -4368,7 +4522,7 @@ export default function DashboardPage() {
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const aktualni = zapisyNaZajecia[classKey] || [];
-    const myEntry = aktualni.find((u: any) => String(u.id) === String(currentUser.id));
+    const myEntry = aktualni.find((u: any) => String(u.klient_id || u.id) === String(currentUser.id));
     const isOnWaitlist = myEntry?.status === 'krzesełko';
 
     if (!isOnWaitlist) {
@@ -4389,12 +4543,15 @@ export default function DashboardPage() {
       const updated = { ...prev };
       keysToDelete.forEach(vk => {
         if (updated[vk]) {
-          updated[vk] = updated[vk].filter(item => item.id !== currentUser.id);
+          updated[vk] = updated[vk].filter(item => String(item.klient_id || item.id) !== String(currentUser.id));
         }
       });
       return updated;
     });
 
+    if (myEntry?.zapis_id) {
+      await supabase.from('zapisy_zajec').delete().eq('id', myEntry.zapis_id);
+    }
     const { error } = await supabase
       .from('zapisy_zajec')
       .delete()
@@ -4464,7 +4621,7 @@ export default function DashboardPage() {
       payload: { klient_id: currentUser.id, class_key: classKey, was_waitlist: isOnWaitlist }
     }]);
 
-    const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.id) !== String(currentUser.id));
+    const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.klient_id || u.id) !== String(currentUser.id));
     
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
       selectedClass,
@@ -4494,7 +4651,7 @@ export default function DashboardPage() {
     if (!currentUser) return;
     
     const aktualni = zapisyNaZajecia[classKey] || [];
-    const myEntry = aktualni.find((u: any) => String(u.id) === String(currentUser.id));
+    const myEntry = aktualni.find((u: any) => String(u.klient_id || u.id) === String(currentUser.id));
     const isOnWaitlist = myEntry?.status === 'krzesełko';
 
     const cancelDeadlineMinutes = bookingRules.cancel_deadline_per_class?.[title] !== undefined
@@ -4518,6 +4675,9 @@ export default function DashboardPage() {
     const dateStr = lastUnderscore !== -1 ? classKey.substring(lastUnderscore + 1) : '';
     const keysToDelete = getKeysVariants(classId, dateStr);
 
+    if (myEntry?.zapis_id) {
+      await supabase.from('zapisy_zajec').delete().eq('id', myEntry.zapis_id);
+    }
     const { error } = await supabase
       .from('zapisy_zajec')
       .delete()
@@ -4580,7 +4740,7 @@ export default function DashboardPage() {
     const classInfo = findClassDetails(classId, dateStr);
     const limitZajec = classInfo?.limit || 12;
 
-    const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.id) !== String(currentUser.id));
+    const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.klient_id || u.id) !== String(currentUser.id));
 
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
       classInfo || { id: classId, title, start: startStr, limit: limitZajec },
@@ -4727,7 +4887,7 @@ export default function DashboardPage() {
           const classId = lastUnderscore !== -1 ? cKey.substring(0, lastUnderscore) : cKey;
           const normalizedKey = `${classId}_${selectedClass.displayDate}`;
           if (!countedDayKeys.has(normalizedKey)) {
-            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.id) === String(klient.id))) {
+            if (Array.isArray(uczestnicy) && uczestnicy.some((u: any) => String(u.klient_id || u.id) === String(klient.id))) {
               userSignupsOnThisDate++;
               countedDayKeys.add(normalizedKey);
             }
@@ -4744,9 +4904,9 @@ export default function DashboardPage() {
       const glownaLiveCount = actualDbList.filter((u: any) => u.status === 'zapisany').length;
       const statusZpisu = glownaLiveCount >= limitZajec ? 'krzesełko' : 'zapisany';
 
-      const { error } = await supabase.from('zapisy_zajec').insert([
+      const { data: insertedZapis, error } = await supabase.from('zapisy_zajec').insert([
         { class_key: classKey, klient_id: klient.id, status: statusZpisu, waitlist_cutoff_minutes: statusZpisu === 'krzesełko' ? 30 : null, obecny: false }
-      ]);
+      ]).select('id').maybeSingle();
       
       if (error) { 
         showToast(`Nie udało się zapisać: ${error.message}`, 'error'); 
@@ -4822,17 +4982,21 @@ export default function DashboardPage() {
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
     const aktualni = zapisyNaZajecia[classKey] || [];
+    const myEntry = aktualni.find((u: any) => String(u.klient_id || u.id) === String(clientToUnregister.id));
 
     setZapisyNaZajecia(prev => {
       const updated = { ...prev };
       keysToDelete.forEach(k => {
         if (updated[k]) {
-          updated[k] = updated[k].filter(item => item.id !== clientToUnregister.id);
+          updated[k] = updated[k].filter(item => String(item.klient_id || item.id) !== String(clientToUnregister.id));
         }
       });
       return updated;
     });
 
+    if (myEntry?.zapis_id) {
+      await supabase.from('zapisy_zajec').delete().eq('id', myEntry.zapis_id);
+    }
     const { error } = await supabase
       .from('zapisy_zajec')
       .delete()
@@ -4844,6 +5008,7 @@ export default function DashboardPage() {
       loadData();
       return; 
     }
+
     let zwrocicWejscie = false;
     if (appRole === 'admin') {
       zwrocicWejscie = confirm("Czy zwrócić klubowiczowi wejście na karnet?");
@@ -4902,7 +5067,7 @@ export default function DashboardPage() {
       }
     ]);
     
-    const pozostaliUczestnicy = aktualni.filter((u: any) => u.id !== clientToUnregister.id);
+    const pozostaliUczestnicy = aktualni.filter((u: any) => String(u.klient_id || u.id) !== String(clientToUnregister.id));
 
     const autoCancelled = await checkAndTriggerImmediateAutoCancel(
       selectedClass,
@@ -4949,6 +5114,12 @@ export default function DashboardPage() {
     if (!selectedClass || !clientToMarkAbsent) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
     const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const aktualni = zapisyNaZajecia[classKey] || [];
+    const myEntry = aktualni.find((u: any) => String(u.klient_id || u.id) === String(clientToMarkAbsent.id));
+
+    if (myEntry?.zapis_id) {
+      await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).eq('id', myEntry.zapis_id);
+    }
     const { error } = await supabase.from('zapisy_zajec').update({ obecny: false, nieobecny: true }).in('class_key', keys).eq('klient_id', clientToMarkAbsent.id);
     if (error) { showToast(`Nie udało się oznaczyć: ${error.message}`, 'error'); return; }
     
@@ -5034,7 +5205,6 @@ export default function DashboardPage() {
       fullDate: dayDate 
     };
   });
-
   let needsNewPass = false; let isPassExpiringSoon = false; let expiringMessage = "";
   let myUpcomingClasses: any[] = [];
   let prawdziweZapisyKlubowicza = 0;
@@ -5091,7 +5261,7 @@ export default function DashboardPage() {
     prawdziweZapisyKlubowicza = getPrawdziweAktywneZapisy(currentUser.id);
     const now = new Date();
     Object.entries(zapisyNaZajecia).forEach(([classKey, uczestnicy]) => {
-      const mojZapis = Array.isArray(uczestnicy) ? uczestnicy.find((u: any) => String(u.id) === String(currentUser.id)) : null;
+      const mojZapis = Array.isArray(uczestnicy) ? uczestnicy.find((u: any) => String(u.klient_id || u.id) === String(currentUser.id)) : null;
       if (mojZapis) {
         const lastUnderscore = classKey.lastIndexOf('_');
         const classId = lastUnderscore !== -1 ? classKey.substring(0, lastUnderscore) : classKey;
@@ -5519,7 +5689,7 @@ export default function DashboardPage() {
                         <span>🎟️ Wejścia:</span> 
                         <span className="text-amber-700">{currentUser.karnetyKlubowicza[0].pozostaloWejsc}</span> / <span>{currentUser.karnetyKlubowicza[0].poczatkoweWejsc || currentUser.karnetyKlubowicza[0].pozostaloWejsc}</span>
                         {currentUser.karnetyKlubowicza[0].transferredEntries > 0 && (
-                          <span className="text-emerald-700 text-[9px] font-extrabold">(+{currentUser.karnetyKlubowicza[0].transferredEntries} przeniesione)</span>
+                          <span className="text-emerald-700 text-[9px] font-extrabold">(+{currentUser.karnetyKlubowicza[0].transferredEntries})</span>
                         )}
                       </span>
                     )}
@@ -5869,7 +6039,7 @@ export default function DashboardPage() {
                         
                         const progInfo = getProgrammedWorkout(item, col.isoDate, col.date);
 
-                        const mySignupEntry = currentUser ? zapisani.find((s: any) => String(s.id) === String(currentUser.id)) : null;
+                        const mySignupEntry = currentUser ? zapisani.find((s: any) => String(s.klient_id || s.id) === String(currentUser.id)) : null;
                         const isUserInMainGroup = mySignupEntry && mySignupEntry.status === 'zapisany';
                         const isUserInWaitlist = mySignupEntry && mySignupEntry.status === 'krzesełko';
 
@@ -6433,7 +6603,7 @@ export default function DashboardPage() {
         const listaKrzesełko = zapisaniWszyscy.filter(u => u.status === 'krzesełko');
         
         const isFull = glownaNieposortowana.length >= limitZajec;
-        const isUserSignedUp = currentUser && zapisaniWszyscy.some((u: any) => String(u.id) === String(currentUser.id));
+        const isUserSignedUp = currentUser && zapisaniWszyscy.some((u: any) => String(u.klient_id || u.id) === String(currentUser.id));
         const filteredSuggestions = klienciList
           .filter(c =>
             `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase().includes(searchClientQuery.toLowerCase()) ||
@@ -6461,7 +6631,7 @@ export default function DashboardPage() {
         const isClassStarted = (() => {
           const now = new Date();
           const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
-          const startDateTime = new Date(yr, parseInt(m, 10) - 1, parseInt(d, 10), parseInt(sh, 10), parseInt(sm, 10), 0);
+          const startDateTime = new Date(yr, parseInt(m, 10) - 1, parseInt(d, 10), parseInt(sh, 10), parseInt(sm), 0);
           return now >= startDateTime;
         })();
 
@@ -6539,7 +6709,7 @@ export default function DashboardPage() {
                 <h4 className="font-black text-xs text-slate-500 uppercase tracking-wider">Główna lista uczestników</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {listaGlowna.map((osobaZapisana) => {
-                    const osoba = klienciList.find(c => c.id === osobaZapisana.id) || osobaZapisana;
+                    const osoba = klienciList.find(c => c.id === (osobaZapisana.klient_id || osobaZapisana.id)) || osobaZapisana;
                     const prawdziweZapisy = getPrawdziweAktywneZapisy(osoba.id);
                     const stanPortfelaStr = String(osoba.wallet || '0').replace(/[^0-9.-]+/g, '');
                     const stanPortfela = parseFloat(stanPortfelaStr) || 0;
@@ -6627,6 +6797,7 @@ export default function DashboardPage() {
                             )}
                           </div>
                         </div>
+
                         {/* Obsługa obecności przez Trenera / Admina */}
                         {canManageClass && (
                           <div className="flex items-center justify-end gap-2 border-t border-sky-100 pt-3 text-xs w-full">
@@ -6687,7 +6858,7 @@ export default function DashboardPage() {
                   </h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {listaKrzesełko.map((osobaZapisana, idx) => {
-                      const osoba = klienciList.find(c => c.id === osobaZapisana.id) || osobaZapisana;
+                      const osoba = klienciList.find(c => c.id === (osobaZapisana.klient_id || osobaZapisana.id)) || osobaZapisana;
                       const prawdziweZapisy = getPrawdziweAktywneZapisy(osoba.id);
                       const stanPortfelaStr = String(osoba.wallet || '0').replace(/[^0-9.-]+/g, '');
                       const stanPortfela = parseFloat(stanPortfelaStr) || 0;
@@ -6816,7 +6987,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-
               {/* Dolny pasek zapisu */}
               {['klubowicz', 'trener'].includes(appRole) && !canManageClass ? (
                 <div className="pt-2">
@@ -6833,7 +7003,6 @@ export default function DashboardPage() {
                       const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
                       const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
                       
-                      // Weryfikacja czy termin treningu nie przekracza ważności karnetu
                       const now = new Date();
                       const todayDateOnly = now.toISOString().split('T')[0];
                       const calcClassDateStr = selectedClass.isoDate || (() => {
