@@ -585,6 +585,16 @@ export default function DashboardPage() {
     const normPassName = normalizeText(passName);
     const normClassTitle = normalizeText(classTitle);
 
+    // BEZWZGLĘDNA REGUŁA: Trening personalny wyłącznie dla osób z aktywną umową 12M!
+    const isPersonalTraining = normClassTitle.includes('personaln');
+    if (isPersonalTraining) {
+      const def = (allPassDefs || []).find((d: any) => {
+        const defName = (d.nazwa || '').trim();
+        return defName.toLowerCase() === passName.toLowerCase() || normalizeText(defName) === normPassName;
+      });
+      return isContractPass(passItem) || (def ? isContractPass(def) : false);
+    }
+
     if (normPassName.includes('open') || normPassName.includes('medicover')) return true;
 
     const passAccessType = normalizeText(passItem.dostepDo || passItem.dostep_do_zajec || '');
@@ -963,6 +973,7 @@ export default function DashboardPage() {
       workout: list[workoutIndex]
     };
   };
+
   const processWaitlistCutoffs = async (
     classes: any[],
     jednorazowe: any[],
@@ -1761,7 +1772,6 @@ export default function DashboardPage() {
             blokadaDo: isContractPass(k) ? endOfCurrentMonthStr : k.blokadaDo,
             powodBlokady: isContractPass(k) ? powod : k.powodBlokady
           }));
-
           await supabase.from('klienci').update({
             blokadaDo: endOfCurrentMonthStr,
             powodBlokady: powod,
@@ -1783,7 +1793,6 @@ export default function DashboardPage() {
       }
     }
   };
-
   const loadData = async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -4036,14 +4045,19 @@ export default function DashboardPage() {
       });
 
       if (!passAllowsThisClass) {
+        const isPersonal = normalizeText(selectedClass.title).includes('personaln');
+        const errorMsg = isPersonal
+          ? `Na trening "${selectedClass.title}" obowiązują wyłącznie karnety na umowę 12M!`
+          : `Twój karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}"! Wybierz odpowiedni karnet w zakładce Karnety.`;
+
         await supabase.from('booking_logs').insert([{
           action_type: 'BOOKING_BLOCKED',
           status: 'BLOCKED',
-          reason: `${currentUser.firstName || 'Klubowicz'}: Posiadany karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}".`,
-          rule_applied: 'pass_class_restriction',
+          reason: `${currentUser.firstName || 'Klubowicz'}: ${errorMsg}`,
+          rule_applied: isPersonal ? 'personal_training_contract_only' : 'pass_class_restriction',
           payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_title: selectedClass.title }
         }]);
-        showToast(`Twój karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}"! Wybierz odpowiedni karnet w zakładce Karnety.`, 'error');
+        showToast(errorMsg, 'error');
         return;
       }
 
@@ -4837,7 +4851,12 @@ export default function DashboardPage() {
       });
 
       if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0 && !passAllowsClass) {
-        if (!confirm(`UWAGA: Karnet klienta "${klient.pass || ''}" nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`)) {
+        const isPersonal = normalizeText(selectedClass.title).includes('personaln');
+        const warnMsg = isPersonal
+          ? `UWAGA: Trening personalny "${selectedClass.title}" wymaga karnetu na umowę 12M. Klient posiada: "${klient.pass || ''}". Czy na pewno chcesz zapisać go mimo to jako zarządca?`
+          : `UWAGA: Karnet klienta "${klient.pass || ''}" nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`;
+
+        if (!confirm(warnMsg)) {
           return;
         }
       }
@@ -5032,7 +5051,7 @@ export default function DashboardPage() {
 
     let updatedNadchodzace = clientToUnregister.zapisyNadchodzace || [];
     if (typeof updatedNadchodzace === 'string') {
-      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) { updatedNadchodzace = []; }
+      try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) {}
     }
     const [dStr, mStr] = selectedClass.displayDate.split('/');
     const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
@@ -7034,10 +7053,13 @@ export default function DashboardPage() {
                       }
 
                       if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
+                        const isPersonal = normalizeText(selectedClass.title).includes('personaln');
                         return (
                           <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
-                            <div>⚠️ Twój karnet nie upoważnia do zapisu na te zajęcia</div>
-                            <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.</div>
+                            <div>⚠️ {isPersonal ? 'Na trening personalny obowiązuje wyłącznie umowa 12M' : 'Twój karnet nie upoważnia do zapisu na te zajęcia'}</div>
+                            <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">
+                              {isPersonal ? 'Zapis możliwy tylko z aktywnym karnetem na umowę 12 miesięcy.' : 'Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.'}
+                            </div>
                           </div>
                         );
                       }
