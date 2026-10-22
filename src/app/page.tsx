@@ -108,6 +108,15 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
+// HELPER: CZY KARNET JEST W TEJ CHWILI AKTYWNIE ZAWIESZONY (DATA DZISIEJSZA MIEŚCI SIĘ W OKRESIE ZAWIESZENIA)
+const isPassCurrentlySuspended = (k: any, checkDateStr?: string) => {
+  if (!k || !k.zawieszonyOd) return false;
+  const d = checkDateStr || new Date().toISOString().split('T')[0];
+  if (k.zawieszonyOd > d) return false;
+  if (k.zawieszonyDo && k.zawieszonyDo < d) return false;
+  return true;
+};
+
 // POWIADOMIENIA DLA TRENERÓW (ŚCIŚLE 1X NA 5 MIN PRZED I 1X PO OSTATNIM TRENINGU, BEZ DUBLI)
 const checkAndSendTrainerReminders = async (
   classes: any[],
@@ -1196,8 +1205,14 @@ export default function DashboardPage() {
     signupsMap: { [key: string]: any[] },
     overridesMap: { [key: string]: any },
     rules: any,
-    days: any[]
+    days: any[],
+    currentRole: string = 'klubowicz'
   ) => {
+    // KROK KRYTYCZNY: Automatyczne odwoływanie w tle może wykonywać WYŁĄCZNIE administrator!
+    // Nigdy nie pozwalamy, aby sesja klubowicza lub trenera odwoływała treningi w tle,
+    // ponieważ zapytania klubowicza z powodu Row Level Security (RLS) w Supabase widzą tylko ograniczone rekordy.
+    if (currentRole !== 'admin') return false;
+
     const now = new Date();
     let hasChanges = false;
 
@@ -1248,17 +1263,28 @@ export default function DashboardPage() {
           const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
           const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-          if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
+          // ZABEZPIECZENIE: Odwołanie może nastąpić tylko W OKNIE czasowym przed startem (diffMinutes > 5).
+          // Jeśli trening się rozpoczął lub trwa (diffMinutes <= 0), nie odwołujemy go!
+          if (diffMinutes <= deadlineMins && diffMinutes > 5) {
+            const classSignupsFromMap = signupsMap[cls.classKey] || [];
+            const activeSignupsFromMap = classSignupsFromMap.filter((s: any) => s.status === 'zapisany');
+
+            // Jeśli na liście jest wystarczająca liczba osób (np. 5 przy min 3), nigdy nie odwołujemy!
+            if (activeSignupsFromMap.length >= minRequired) {
+              continue;
+            }
+
             const allVariantKeys = getKeysVariants(cls.id, col.date);
-            
-            // BEZPOŚREDNIA WERYFIKACJA W SUPABASE (OCHRONA PEŁNYCH GRUP)
-            const { data: liveDbParticipants } = await supabase
+            const { data: liveDbParticipants, error: liveDbErr } = await supabase
               .from('zapisy_zajec')
               .select('*')
               .in('class_key', allVariantKeys);
 
-            const classSignups = liveDbParticipants || [];
-            const activeSignups = classSignups.filter((s: any) => s.status === 'zapisany');
+            if (liveDbErr || !liveDbParticipants) {
+              continue;
+            }
+
+            const activeSignups = liveDbParticipants.filter((s: any) => s.status === 'zapisany');
 
             if (activeSignups.length < minRequired) {
               hasChanges = true;
@@ -1281,7 +1307,7 @@ export default function DashboardPage() {
               const formattedDate = `${dayName}, ${col.date}.${classYear}`;
               const durationText = calculateDuration(cls.start, cls.end);
 
-              for (const participant of classSignups) {
+              for (const participant of liveDbParticipants) {
                 const pId = participant.klient_id || participant.id;
                 participantIds.push(pId);
                 const { data: clientData } = await supabase.from('klienci').select('*').eq('id', pId).maybeSingle();
@@ -1326,7 +1352,7 @@ export default function DashboardPage() {
               await supabase.from('booking_logs').insert([{
                 action_type: 'CLASS_AUTO_CANCELLED',
                 status: 'SUCCESS',
-                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${classSignups.length} osób i zwrócono wejścia.`,
+                reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${liveDbParticipants.length} osób i zwrócono wejścia.`,
                 rule_applied: 'min_participants_auto_cancel',
                 payload: { class_key: cls.classKey, participants_count: activeSignups.length, min_required: minRequired }
               }]);
@@ -1365,6 +1391,13 @@ export default function DashboardPage() {
     }
 
     if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
+      // OCHRONA PEŁNEJ GRUPY: Jeśli po wypisaniu pozostało co najmniej minRequired osób (np. 5 przy min 3),
+      // pod żadnym pozorem nie odwołujemy zajęć!
+      const activeSignupsRemaining = (currentRemainingSignups || []).filter((s: any) => s.status === 'zapisany');
+      if (activeSignupsRemaining.length >= minRequired) {
+        return false;
+      }
+
       let d = 1, m = 1;
       if (displayDate.includes('/')) {
         [d, m] = displayDate.split('/').map(Number);
@@ -1379,90 +1412,79 @@ export default function DashboardPage() {
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-      if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
+      // Odwołanie tylko gdy do startu zostało więcej niż 5 minut (nie w minucie startu ani po)
+      if (diffMinutes <= deadlineMins && diffMinutes > 5) {
+        const classKey = `${classItem.id}_${displayDate}`;
         const allVariantKeys = getKeysVariants(classItem.id, displayDate);
 
-        // KROK KRYTYCZNY: Zawsze pytamy bazę danych w czasie rzeczywistym zamiast ufać pamięci RAM
-        const { data: liveDbEntries } = await supabase
-          .from('zapisy_zajec')
-          .select('*')
-          .in('class_key', allVariantKeys);
-
-        const realParticipants = liveDbEntries || [];
-        const activeSignups = realParticipants.filter((s: any) => s.status === 'zapisany');
-
-        if (activeSignups.length < minRequired) {
-          const classKey = `${classItem.id}_${displayDate}`;
-
-          for (const vKey of allVariantKeys) {
-            await supabase.from('nadpisania_zajec').upsert({
-              class_key: vKey,
-              start: classItem.start,
-              end: classItem.end,
-              trainer: classItem.trainer,
-              limit: classItem.limit || 12,
-              is_odwolane: true,
-              is_usuniete: false
-            }, { onConflict: 'class_key' });
-          }
-
-          const participantIds: number[] = [];
-          const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
-          const dayName = dayNames[classStartDateTime.getDay()];
-          const formattedDate = `${dayName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
-          const durationText = calculateDuration(classItem.start, classItem.end);
-
-          for (const participant of realParticipants) {
-            const pId = participant.klient_id || participant.id;
-            participantIds.push(pId);
-            const { data: clientData } = await supabase.from('klienci').select('*').eq('id', pId).maybeSingle();
-            if (clientData) {
-              let parsedKarnety = [];
-              if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
-              else if (typeof clientData.karnetyKlubowicza === 'string') {
-                try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
-              }
-
-              const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
-              if (passIndex !== -1) {
-                const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10) || 0;
-                parsedKarnety[passIndex] = {
-                  ...parsedKarnety[passIndex],
-                  pozostaloWejsc: currentRemaining + 1,
-                  zeroEntriesGraceUntil: null
-                };
-                await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', pId);
-              }
-
-              await supabase.from('transakcje').insert([{
-                klient_id: pId,
-                typ_operacji: 'zajecia_wypis',
-                class_key: classKey,
-                opis: `Automatyczne odwołanie zajęć: ${classItem.title} (${formattedDate} ${classItem.start}-${classItem.end || ''}, ${durationText}) po wypisaniu uczestnika (pozostało: ${activeSignups.length}/${minRequired} os.). Zwrócono 1 wejście.`
-              }]);
-            }
-          }
-
-          if (participantIds.length > 0) {
-            await sendPushNotification(participantIds, {
-              title: `Odwołano trening: ${classItem.title}`,
-              body: `Trening ${classItem.title} w dniu ${displayDate} o godz. ${classItem.start} został automatycznie odwołany z powodu zbyt małej liczby osób (${activeSignups.length}/${minRequired}). Zwrócono wejście.`,
-              url: '/'
-            });
-          }
-
-          await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
-
-          await supabase.from('booking_logs').insert([{
-            action_type: 'CLASS_AUTO_CANCELLED_ON_UNENROLL',
-            status: 'SUCCESS',
-            reason: `Zajęcia ${classItem.title} (${classKey}) odwołane natychmiast po wypisaniu uczestnika (${activeSignups.length}/${minRequired} os.). Wypisano ${realParticipants.length} osób i zwrócono wejścia.`,
-            rule_applied: 'min_participants_auto_cancel_immediate',
-            payload: { class_key: classKey, participants_count: activeSignups.length, min_required: minRequired }
-          }]);
-
-          return true;
+        for (const vKey of allVariantKeys) {
+          await supabase.from('nadpisania_zajec').upsert({
+            class_key: vKey,
+            start: classItem.start,
+            end: classItem.end,
+            trainer: classItem.trainer,
+            limit: classItem.limit || 12,
+            is_odwolane: true,
+            is_usuniete: false
+          }, { onConflict: 'class_key' });
         }
+
+        const participantIds: number[] = [];
+        const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+        const dayName = dayNames[classStartDateTime.getDay()];
+        const formattedDate = `${dayName}, ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${classYear}`;
+        const durationText = calculateDuration(classItem.start, classItem.end);
+
+        for (const participant of currentRemainingSignups) {
+          const pId = participant.klient_id || participant.id;
+          participantIds.push(pId);
+          const { data: clientData } = await supabase.from('klienci').select('*').eq('id', pId).maybeSingle();
+          if (clientData) {
+            let parsedKarnety = [];
+            if (Array.isArray(clientData.karnetyKlubowicza)) parsedKarnety = clientData.karnetyKlubowicza;
+            else if (typeof clientData.karnetyKlubowicza === 'string') {
+              try { parsedKarnety = JSON.parse(clientData.karnetyKlubowicza); } catch(e) {}
+            }
+
+            const passIndex = parsedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+            if (passIndex !== -1) {
+              const currentRemaining = parseInt(parsedKarnety[passIndex].pozostaloWejsc, 10) || 0;
+              parsedKarnety[passIndex] = {
+                ...parsedKarnety[passIndex],
+                pozostaloWejsc: currentRemaining + 1,
+                zeroEntriesGraceUntil: null
+              };
+              await supabase.from('klienci').update({ karnetyKlubowicza: parsedKarnety }).eq('id', pId);
+            }
+
+            await supabase.from('transakcje').insert([{
+              klient_id: pId,
+              typ_operacji: 'zajecia_wypis',
+              class_key: classKey,
+              opis: `Automatyczne odwołanie zajęć: ${classItem.title} (${formattedDate} ${classItem.start}-${classItem.end || ''}, ${durationText}) po wypisaniu uczestnika (pozostało: ${activeSignupsRemaining.length}/${minRequired} os.). Zwrócono 1 wejście.`
+            }]);
+          }
+        }
+
+        if (participantIds.length > 0) {
+          await sendPushNotification(participantIds, {
+            title: `Odwołano trening: ${classItem.title}`,
+            body: `Trening ${classItem.title} w dniu ${displayDate} o godz. ${classItem.start} został automatycznie odwołany z powodu zbyt małej liczby osób (${activeSignupsRemaining.length}/${minRequired}). Zwrócono wejście.`,
+            url: '/'
+          });
+        }
+
+        await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
+
+        await supabase.from('booking_logs').insert([{
+          action_type: 'CLASS_AUTO_CANCELLED_ON_UNENROLL',
+          status: 'SUCCESS',
+          reason: `Zajęcia ${classItem.title} (${classKey}) odwołane natychmiast po wypisaniu uczestnika (${activeSignupsRemaining.length}/${minRequired} os.). Wypisano ${currentRemainingSignups.length} osób i zwrócono wejścia.`,
+          rule_applied: 'min_participants_auto_cancel_immediate',
+          payload: { class_key: classKey, participants_count: activeSignupsRemaining.length, min_required: minRequired }
+        }]);
+
+        return true;
       }
     }
     return false;
@@ -1509,7 +1531,8 @@ export default function DashboardPage() {
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-      if (diffMinutes <= deadlineMins && diffMinutes >= 0) {
+      // Status auto-odwołania widoczny tylko przed startem (diffMinutes > 0)
+      if (diffMinutes <= deadlineMins && diffMinutes > 0) {
         const activeCount = Array.isArray(signups) ? signups.filter(s => s.status === 'zapisany').length : 0;
         if (activeCount < minRequired) {
           return {
@@ -1730,7 +1753,6 @@ export default function DashboardPage() {
     } catch (e) {}
     return "60 min";
   };
-
   const nextMonth = () => {
     if (!calendarViewDate) return;
     setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1));
@@ -1793,6 +1815,7 @@ export default function DashboardPage() {
       }
     }
   };
+
   const loadData = async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -1975,6 +1998,51 @@ export default function DashboardPage() {
                 k.pozostaloWejsc = isNaN(valWejsc) ? null : valWejsc;
                 k.poczatkoweWejsc = isNaN(valWejsc) ? null : valWejsc;
               }
+            }
+
+            // AUTOMATYCZNE ODWIESZENIE KARNETU GDY MINIE TERMIN ZAWIESZENIA (zawieszonyDo < dzisiaj)
+            if (k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo < todayDateOnly) {
+              const startD = new Date(k.zawieszonyOd);
+              const endD = new Date(k.zawieszonyDo);
+              startD.setHours(0, 0, 0, 0);
+              endD.setHours(0, 0, 0, 0);
+              let diffDays = Math.floor((endD.getTime() - startD.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+              if (diffDays < 1) diffDays = 1;
+
+              let newExpDateStr = k.waznyDo;
+              if (k.waznyDo) {
+                const curExp = new Date(k.waznyDo);
+                curExp.setDate(curExp.getDate() + diffDays);
+                newExpDateStr = curExp.toISOString().split('T')[0];
+              }
+
+              const historiaEntry = {
+                id: Date.now(),
+                od: k.zawieszonyOd,
+                do: k.zawieszonyDo,
+                dni: diffDays,
+                auto: true
+              };
+
+              let updatedSuspensionDaysLeft = k.contractSuspensionDaysLeft;
+              let updatedTotalSuspendedDaysUsed = k.totalSuspendedDaysUsed || 0;
+
+              if (isContract) {
+                const currentPool = k.contractSuspensionDaysLeft !== undefined ? k.contractSuspensionDaysLeft : 30;
+                updatedSuspensionDaysLeft = Math.max(0, currentPool - diffDays);
+                updatedTotalSuspendedDaysUsed += diffDays;
+              }
+
+              k.waznyDo = newExpDateStr;
+              k.zawieszonyOd = null;
+              k.zawieszonyDo = null;
+              k.statusTekst = isContract 
+                ? `Umowa 12M (Rata ${k.rata || '0/12'} • Ważny do: ${newExpDateStr})`
+                : `Ważny do: ${newExpDateStr}`;
+              k.contractSuspensionDaysLeft = updatedSuspensionDaysLeft;
+              k.totalSuspendedDaysUsed = updatedTotalSuspendedDaysUsed;
+              k.historiaZawieszen = [historiaEntry, ...(k.historiaZawieszen || [])];
+              karnetyZmienione = true;
             }
 
             // Automatyczna aktualizacja etykiety karnetu oczekującego po wejściu w okres ważności
@@ -2418,13 +2486,15 @@ export default function DashboardPage() {
         activeDashboardDays
       );
 
+      // KROK KRYTYCZNY: Automatyczne sprawdzanie minimum osób uruchamia wyłącznie sesja administratora
       await processAutoCancellations(
         mappedSzablony,
         mappedJednorazowe,
         groupedZapisy,
         nadpisaniaMap,
         parsedRules,
-        activeDashboardDays
+        activeDashboardDays,
+        determinedRole
       );
 
       // CYKLICZNE SPRAWDZENIE I WYSYŁKA POWIADOMIEŃ DO TRENERÓW (ŚCIŚLE 1X PRZED I 1X PO OSTATNIM TRENINGU DNIA)
@@ -3368,6 +3438,7 @@ export default function DashboardPage() {
       setIsBuyPassModalOpen(false);
     }
   };
+
   const handleDeleteClient = async (id: number) => {
     if (confirm("Czy na pewno chcesz całkowicie usunąć to konto?")) {
       await supabase.from('klienci').delete().eq('id', id);
@@ -5224,6 +5295,7 @@ export default function DashboardPage() {
       fullDate: dayDate 
     };
   });
+
   let needsNewPass = false; let isPassExpiringSoon = false; let expiringMessage = "";
   let myUpcomingClasses: any[] = [];
   let prawdziweZapisyKlubowicza = 0;
@@ -5334,7 +5406,7 @@ export default function DashboardPage() {
 
   const isCurrentUserBlocked = currentUser?.blokadaDo && currentUser.blokadaDo >= todayStr;
   const activePassBlocked = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr);
-  const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
+  const activePassSuspended = (currentUser?.karnetyKlubowicza || []).find((k: any) => isPassCurrentlySuspended(k, todayStr));
 
   const filteredOperationsList = wszystkieTransakcje.filter(t => {
     if (!t) return false;
@@ -5717,7 +5789,7 @@ export default function DashboardPage() {
                         Ważny do: {currentUser.karnetyKlubowicza[0].waznyDo}
                       </span>
                     )}
-                    {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && currentUser.karnetyKlubowicza[0].zawieszonyOd && (
+                    {currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0 && isPassCurrentlySuspended(currentUser.karnetyKlubowicza[0], todayStr) && (
                       <span className="bg-amber-100 text-amber-900 px-4 py-1.5 rounded-full text-xs font-black border border-amber-200 flex items-center gap-1">
                         ⏸️ ZAWIESZONE: OD {currentUser.karnetyKlubowicza[0].zawieszonyOd} {currentUser.karnetyKlubowicza[0].zawieszonyDo ? `DO ${currentUser.karnetyKlubowicza[0].zawieszonyDo}` : ''}
                       </span>
@@ -6049,7 +6121,7 @@ export default function DashboardPage() {
                         const isPastTime = col.isoDate === todayStr && (item.start < currentTimeStr);
                         const isPastEvent = isPastDay || isPastTime;
                         
-                        // WYMÓG 2: Trener i admin mają zawsze dostęp do minionych zajęć, blokada dotyczy tylko klubowiczów
+                        // Trener i admin mają zawsze dostęp do minionych zajęć, blokada dotyczy tylko klubowiczów
                         const isLockedForClient = appRole === 'klubowicz' && isPastEvent;
 
                         const autoCancelStatus = checkClassAutoCancellation(item, col.date, zapisani);
@@ -6362,7 +6434,7 @@ export default function DashboardPage() {
                   filteredClients.map((client) => {
                     const maKarnet = client.karnetyKlubowicza && client.karnetyKlubowicza.length > 0;
                     const nazwaKarnetu = maKarnet ? client.karnetyKlubowicza.map((k: any) => k.nazwa).join(', ') : (client.pass || 'Brak karnetu');
-                    const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => k.zawieszonyOd);
+                    const aktywnyKarnetZawieszony = (client.karnetyKlubowicza || []).find((k: any) => isPassCurrentlySuspended(k, todayStr));
                     const aktywnaBlokada = (client.karnetyKlubowicza || []).find((k: any) => k.blokadaDo && k.blokadaDo >= todayStr) || (client.blokadaDo && client.blokadaDo >= todayStr);
                     let ostatecznaData = 'Brak';
                     let badgeColorClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
@@ -6484,6 +6556,7 @@ export default function DashboardPage() {
           </section>
         </div>
       )}
+
       {/* MODAL: KUP KARNET */}
       {isBuyPassModalOpen && (() => {
         const effectiveDiscount = getEffectiveDiscount(currentUser);
@@ -7540,7 +7613,7 @@ export default function DashboardPage() {
                       .map((karnet: any) => {
                         let isExpiring = false;
                         let isPending = karnet.statusTekst?.includes('Oczekujący');
-                        const czyZawieszony = !!karnet.zawieszonyOd;
+                        const czyZawieszony = isPassCurrentlySuspended(karnet, todayStr);
                         const isContract = isContractPass(karnet);
 
                         if (!isPending && !isContract) {
@@ -7791,7 +7864,7 @@ export default function DashboardPage() {
                     Zatrzymuje bieg karnetu. Liczba dni zawieszenia zostanie wyliczona <strong>dopiero w momencie odwieszenia</strong> i wtedy doliczona do ważności.
                   </p>
                 </div>
-                {suspendPassTarget.zawieszonyOd ? (
+                {suspendPassTarget.zawieszonyOd && isPassCurrentlySuspended(suspendPassTarget, todayStr) ? (
                   <div className="space-y-3 text-xs mt-4">
                     <div className="flex bg-white rounded-lg border border-amber-200 overflow-hidden font-bold">
                       <div className="flex-1 py-1.5 text-center bg-amber-200 text-amber-900">Karnet zawieszony</div>
