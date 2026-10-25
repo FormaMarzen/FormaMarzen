@@ -60,6 +60,28 @@ const getContractEndOfMonthDate = (baseDateStr?: string): string => {
   return `${resYear}-${resMonth}-${resDay}`;
 };
 
+// POMOCNIK SPRAWDZAJĄCY CZY DATA TO OSTATNI DZIEŃ MIESIĄCA KALENDARZOWEGO
+const isLastDayOfMonth = (dateStr?: string | null): boolean => {
+  if (!dateStr || dateStr === '-') return false;
+  try {
+    const parts = dateStr.split('-').map(Number);
+    if (parts.length !== 3 || isNaN(parts[0]) || isNaN(parts[1]) || isNaN(parts[2])) return false;
+    const lastDayInMonth = new Date(parts[0], parts[1], 0).getDate();
+    return parts[2] === lastDayInMonth;
+  } catch (e) {
+    return false;
+  }
+};
+
+// HELPER: CZY KARNET JEST W TEJ CHWILI AKTYWNIE ZAWIESZONY (DATA DZISIEJSZA MIEŚCI SIĘ W OKRESIE ZAWIESZENIA)
+const isPassCurrentlySuspended = (k: any, checkDateStr?: string): boolean => {
+  if (!k || !k.zawieszonyOd) return false;
+  const d = checkDateStr || new Date().toISOString().split('T')[0];
+  if (k.zawieszonyOd > d) return false;
+  if (k.zawieszonyDo && k.zawieszonyDo < d) return false;
+  return true;
+};
+
 // UNIWERSALNY, ODPORNY PARSER DATY Z CLASS_KEY
 const parseDateFromClassKey = (classKey: string): Date => {
   const parts = classKey ? String(classKey).split('_') : [];
@@ -1062,12 +1084,76 @@ export default function KarnetyPage() {
 
             let tempKarnety = parsedKarnety.map((k: any) => {
               if (isContractPassCheck(k)) {
-                return { ...k, isContract12M: true };
+                k.isContract12M = true;
+
+                // NORMALIZACJA DLA UMÓW 12M: Ważność na bieżąco kończy się ZAWSZE z końcem opłaconego miesiąca kalendarzowego!
+                const isBonusActive = k.rata?.toLowerCase().includes('bonus') || k.statusTekst?.includes('Bonus z zawieszenia') || k.bonusActivated === true;
+                if (!isBonusActive) {
+                  const truePaidUntil = c.umowa_oplacona_do || k.umowa_oplacona_do;
+                  if (truePaidUntil && isLastDayOfMonth(truePaidUntil) && k.waznyDo !== truePaidUntil) {
+                    k.waznyDo = truePaidUntil;
+                    karnetyChanged = true;
+                  } else if (k.waznyDo && !isLastDayOfMonth(k.waznyDo)) {
+                    // Jeśli waznyDo zostało sztucznie przesunięte przez poprzednie zawieszenie (np. 2026-12-12), cofnij do ostatniego dnia poprzedniego miesiąca (2026-11-30)
+                    const parts = k.waznyDo.split('-').map(Number);
+                    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                      const prevMonthLast = new Date(parts[0], parts[1] - 1, 0);
+                      const fixedDate = `${prevMonthLast.getFullYear()}-${String(prevMonthLast.getMonth() + 1).padStart(2, '0')}-${String(prevMonthLast.getDate()).padStart(2, '0')}`;
+                      k.waznyDo = fixedDate;
+                      karnetyChanged = true;
+                    }
+                  }
+                }
+
+                // AUTOMATYCZNE ODWIESZENIE PO UPŁYWIE TERMINU ZAWIESZENIA DLA UMOWY 12M:
+                // Zdejmuje flagę zawieszenia bez przedłużania waznyDo (dni zawieszenia są bezpieczne w totalSuspendedDaysUsed)
+                if (k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo < todayDateOnly) {
+                  k.zawieszonyOd = null;
+                  k.zawieszonyDo = null;
+                  k.statusTekst = isBonusActive
+                    ? `Umowa 12M (Bonus z zawieszenia • Ważny do: ${k.waznyDo})`
+                    : `Umowa 12M (Rata ${k.rata || '0/12'} • Ważny do: ${k.waznyDo})`;
+                  karnetyChanged = true;
+                }
+              }
+
+              // AUTOMATYCZNE ODWIESZENIE DLA KARNETÓW STANDARDOWYCH (DODANIE DNI DO WAZNYDO)
+              if (!isContractPassCheck(k)) {
+                if (k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo < todayDateOnly) {
+                  const startD = new Date(k.zawieszonyOd);
+                  const endD = new Date(k.zawieszonyDo);
+                  startD.setHours(0, 0, 0, 0);
+                  endD.setHours(0, 0, 0, 0);
+                  let diffDays = Math.floor((endD.getTime() - startD.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                  if (diffDays < 1) diffDays = 1;
+
+                  let newExpDateStr = k.waznyDo;
+                  if (k.waznyDo) {
+                    const curExp = new Date(k.waznyDo);
+                    curExp.setDate(curExp.getDate() + diffDays);
+                    newExpDateStr = `${curExp.getFullYear()}-${String(curExp.getMonth() + 1).padStart(2, '0')}-${String(curExp.getDate()).padStart(2, '0')}`;
+                  }
+
+                  const historiaEntry = {
+                    id: Date.now(),
+                    od: k.zawieszonyOd,
+                    do: k.zawieszonyDo,
+                    dni: diffDays,
+                    auto: true
+                  };
+
+                  k.waznyDo = newExpDateStr;
+                  k.zawieszonyOd = null;
+                  k.zawieszonyDo = null;
+                  k.statusTekst = `Ważny do: ${newExpDateStr}`;
+                  k.historiaZawieszen = [historiaEntry, ...(k.historiaZawieszen || [])];
+                  karnetyChanged = true;
+                }
               }
 
               const isExpiredDate = k.waznyDo && k.waznyDo < todayDateOnly;
 
-              if (isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0 && !hasFutureBookings) {
+              if (!isContractPassCheck(k) && isExpiredDate && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc > 0 && !hasFutureBookings) {
                 karnetyChanged = true;
                 return {
                   ...k,
@@ -1077,7 +1163,7 @@ export default function KarnetyPage() {
               }
 
               // AUTO-HEAL: SYNCHRONIZACJA KARNETÓW ILOŚCIOWYCH Z PRZYSZŁYMI REZERWACJAMI
-              if (k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
+              if (!isContractPassCheck(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && k.pozostaloWejsc <= 0) {
                 const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
                 const isLowPrice = passPriceNum <= 150;
 
@@ -1272,11 +1358,14 @@ export default function KarnetyPage() {
 
             if (karnetyChanged || walletChanged || shouldPersistContinuityLoss) {
               try {
+                const latestExpiryDate = verifiedKarnety.map(k => k.waznyDo).filter(Boolean).sort().reverse()[0] || c.Wygasa;
+
                 const updatePayload: any = {
                   karnetyKlubowicza: verifiedKarnety,
                   has_lost_continuity: continuityBroken,
                   hasLostContinuity: continuityBroken,
                   continuityBreakNotice: continuityNotice,
+                  Wygasa: latestExpiryDate,
                   ...(continuityBroken ? { 
                     rabat: 0, 
                     cyklCiaglosci: 1 
@@ -1614,7 +1703,6 @@ export default function KarnetyPage() {
     setObrazekUrl(item.obrazekUrl || null);
     setIsModalOpen(true);
   };
-
   const handleToggleZajecie = (nazwaZajec: string) => {
     if (zaznaczoneZajecia.includes(nazwaZajec)) {
       setZaznaczoneZajecia(zaznaczoneZajecia.filter(z => z !== nazwaZajec));
@@ -2071,6 +2159,7 @@ export default function KarnetyPage() {
       setIsProcessingPayment(false);
     }
   };
+
   // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO (Z BLOKADĄ WIELOKLIKU I WYKLUCZENIEM Z CIĄGŁOŚCI KARNETÓW <= 150 ZŁ I 0 ZŁ)
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2556,7 +2645,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZATWIERDZENIE ZAWIESZENIA (Z REGUŁAMI: OD JUTRA ORAZ NA PRZEŁOMIE KWARTAŁÓW DO 28 DNI)
+  // ZATWIERDZENIE ZAWIESZENIA (ZASADA DLA UMÓW 12M: BRAK PRZEDŁUŻANIA WAZNYDO NA BIEŻĄCO - WAŻNOŚĆ ZOSTAJE DO KOŃCA MIESIĄCA!)
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -2737,13 +2826,18 @@ export default function KarnetyPage() {
     isSubmittingRef.current = true;
     try {
       let newExtendedExpiry = targetKarnet.waznyDo;
-      if (targetKarnet.waznyDo) {
+      
+      // KLUCZOWA ZASADA: DLA UMÓW 12M NIE PRZEDŁUŻAMY WAZNYDO NA BIEŻĄCO!
+      // Ważność pozostaje sztywno do końca opłaconego miesiąca kalendarzowego.
+      if (!isContract && targetKarnet.waznyDo) {
         const parts = targetKarnet.waznyDo.split('-');
         if (parts.length === 3) {
           const expDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
           expDate.setDate(expDate.getDate() + effectiveDaysToExtend);
           newExtendedExpiry = `${expDate.getFullYear()}-${String(expDate.getMonth() + 1).padStart(2, '0')}-${String(expDate.getDate()).padStart(2, '0')}`;
         }
+      } else if (isContract) {
+        newExtendedExpiry = targetKarnet.waznyDo;
       }
 
       const newPassSuspensionRecord = {
@@ -2812,8 +2906,8 @@ export default function KarnetyPage() {
         Wygasa: latestExpiryDate
       });
 
-      const successMsg = isContract && weekendDaysCount >= 1 && weekdaysCount === 1
-        ? `Pomyślnie zawieszono karnet! Odliczono 1 dzień roboczy z puli (weekend bez odliczenia). Data ważności została wydłużona do ${newExtendedExpiry}.`
+      const successMsg = isContract
+        ? `Pomyślnie zawieszono karnet na umowę (${effectiveDaysToDeduct} ${effectiveDaysToDeduct === 1 ? 'dzień' : 'dni'}). Ważność bieżącego okresu rozliczeniowego pozostaje do ${targetKarnet.waznyDo}, a wykorzystane dni zawieszenia zostaną dodane do bezpłatnego okresu bonusowego na koniec umowy!`
         : `Pomyślnie zawieszono karnet na okres ${effectiveDaysToExtend} dni. Data ważności została wydłużona do ${newExtendedExpiry}.`;
 
       showToast(successMsg, 'success');
@@ -2884,8 +2978,9 @@ export default function KarnetyPage() {
 
       const unusedDaysRefund = Math.max(0, plannedDeducted - actualDeducted);
 
+      // Dla umów 12M ważność nie była wydłużana, więc nie cofamy waznyDo!
       let correctedExpiryDate = targetKarnet.waznyDo;
-      if (unusedDaysRefund > 0 && targetKarnet.waznyDo) {
+      if (!isContractPassCheck(targetKarnet) && unusedDaysRefund > 0 && targetKarnet.waznyDo) {
         const parts = targetKarnet.waznyDo.split('-');
         if (parts.length === 3) {
           const currentExp = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
@@ -2983,7 +3078,7 @@ export default function KarnetyPage() {
     return isActive;
   });
 
-  const suspendedPasses = karnetyList.filter((k: any) => k.zawieszonyOd);
+  const suspendedPasses = karnetyList.filter((k: any) => k.zawieszonyOd && isPassCurrentlySuspended(k, todayStr));
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3254,7 +3349,7 @@ export default function KarnetyPage() {
               karnetyList.map((karnet: any) => {
                 let isExpiring = false;
                 let isPending = karnet.statusTekst?.includes('Oczekujący');
-                let isSuspendedLocal = !!karnet.zawieszonyOd;
+                let isSuspendedLocal = isPassCurrentlySuspended(karnet, todayStr);
                 const isContract = isContractPassCheck(karnet);
                 const isQuantity = isQuantityPassCheck(karnet);
                 const contractInfo = getContractRataInfo(karnet);
@@ -3307,7 +3402,7 @@ export default function KarnetyPage() {
                                 ? 'bg-purple-100 text-purple-900 border-purple-300'
                                 : isBonus13thActive 
                                 ? 'Umowa 12M • Dni bonusowe' 
-                                : `Umowa 12M • Rata ${karnet.rata || '0/12'}`}
+                                : `Umowa 12M • Rata ${karnet.rata || '0/12'}`
                             }`}>
                               {isLatePaymentBlocked
                                 ? '⚠️ Brak wpłaty za bieżący miesiąc'
@@ -3339,6 +3434,8 @@ export default function KarnetyPage() {
                           <span className={`font-semibold px-3 py-1 rounded-full text-xs border shadow-sm ${statusColorClass}`}>
                             {isLatePaymentBlocked
                               ? 'Blokada zapisów (Brak wpłaty do 3. dnia m-ca)'
+                              : isSuspendedLocal
+                              ? `Zawieszony (od ${karnet.zawieszonyOd} do ${karnet.zawieszonyDo})`
                               : karnet.statusTekst || `Ważny do: ${karnet.waznyDo}`}
                           </span>
                           {karnet.cena && !isBonus13thActive && (
@@ -3349,6 +3446,11 @@ export default function KarnetyPage() {
                           {isContract && (
                             <span className="bg-sky-50 text-sky-800 font-bold px-3 py-1 rounded-full text-xs border border-sky-200">
                               Pozostało zawieszenia: <strong className="text-sky-950">{contractInfo.suspensionDaysLeft} dni</strong>
+                            </span>
+                          )}
+                          {isContract && contractInfo.totalSuspUsed > 0 && (
+                            <span className="bg-purple-50 text-purple-900 font-bold px-3 py-1 rounded-full text-xs border border-purple-200">
+                              Wykorzystano (bonus po umowie): <strong className="text-purple-950">+{contractInfo.totalSuspUsed} dni</strong>
                             </span>
                           )}
                         </div>
@@ -3451,7 +3553,7 @@ export default function KarnetyPage() {
               <div className="flex-1 text-center sm:text-left">
                 <h3 className="font-bold text-slate-800 text-sm">Chcesz zamrozić swój karnet?</h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Zawieszenie rozpoczyna się najwcześniej od jutra. Na przełomie kwartałów możesz zawiesić karnet nawet do 28 dni (maks. 14 dni na kwartał). Dla umów 12M masz 30 dni w roku.
+                  Zawieszenie rozpoczyna się najwcześniej od jutra. Na przełomie kwartałów możesz zawiesić karnet nawet do 28 dni (maks. 14 dni na kwartał). Dla umów 12M masz 30 dni w roku, które po 12. racie odbierzesz jako bezpłatne dni bonusowe.
                 </p>
               </div>
               {suspendedPasses.length > 0 ? (
@@ -3570,8 +3672,9 @@ export default function KarnetyPage() {
                   <li>
                     <strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni darmowego zawieszenia</strong> w roku.
                     <div className="mt-1 pl-2 border-l-2 border-sky-300 space-y-1 text-[11px] text-slate-700">
+                      <div>• <strong>Brak przesuwania ważności na bieżąco:</strong> Bieżąca data ważności karnetu pozostaje zawsze do końca opłaconego miesiąca kalendarzowego.</div>
                       <div>• <strong>Blokada weekendowa:</strong> Nie można zawiesić karnetu wyłącznie na sobotę i/lub niedzielę.</div>
-                      <div>• <strong>Weekend + 1 dzień roboczy:</strong> Z puli 30 dni odliczany jest <strong>tylko 1 dzień</strong> (za dzień roboczy) i o 1 dzień wydłuża się karnet.</div>
+                      <div>• <strong>Weekend + 1 dzień roboczy:</strong> Z puli 30 dni odliczany jest <strong>tylko 1 dzień</strong> (za dzień roboczy).</div>
                       <div>• <strong>Weekend + min. 2 dni robocze:</strong> Odliczane są <strong>pełne dni</strong> kalendarzowe.</div>
                     </div>
                     Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong> przedłużający Twój karnet!
@@ -3584,7 +3687,7 @@ export default function KarnetyPage() {
                   </li>
                   <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
                   <li><strong>Aktywna blokada konta / karnetu:</strong> Zawieszenie karnetu jest niedozwolone w przypadku aktywnej blokady konta lub braku opłaty ratalnej.</li>
-                  <li><strong>Odwieszenie przed czasem:</strong> Karnet możesz odwiesić w dowolnym momencie, a niewykorzystane dni zostaną automatycznie zwrócone do puli i uwzględnione w ważności karnetu.</li>
+                  <li><strong>Odwieszenie przed czasem:</strong> Karnet możesz odwiesić w dowolnym momencie, a niewykorzystane dni zostaną automatycznie zwrócone do puli.</li>
                 </ul>
               </div>
 
@@ -3608,7 +3711,7 @@ export default function KarnetyPage() {
               <div className="space-y-4 text-xs">
                 <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium p-4 rounded-xl leading-relaxed text-center">
                   Czy na pewno chcesz <strong>już dzisiaj</strong> odwiesić swój karnet i wrócić na treningi? <br/><br/>
-                  System przeliczy faktyczne dni zawieszenia i o tę wartość przedłuży ważność karnetu (oraz doda je do bezpłatnego okresu bonusowego po 12. racie).
+                  System zakończy stan zawieszenia, a wykorzystane dni zostaną zabezpieczone w puli dni bonusowych do odebrania po zakończeniu umowy.
                 </div>
                 
                 <div className="pt-4 flex justify-end gap-2 border-t border-slate-100">
@@ -3712,6 +3815,9 @@ export default function KarnetyPage() {
                       <div className="flex justify-between text-sky-950 font-bold border-t border-slate-200 pt-1.5 mt-1">
                         <span>Do odliczenia z puli 30 dni:</span>
                         <span className="font-black text-sky-700">{breakdown.weekdaysCount === 0 ? '0 dni (blokada)' : `${deductionPreview} ${deductionPreview === 1 ? 'dzień' : 'dni'}`}</span>
+                      </div>
+                      <div className="text-[10px] text-emerald-800 font-bold bg-emerald-50 border border-emerald-200 p-2 rounded-lg mt-1">
+                        🔒 Ważność okresu rozliczeniowego nie ulega zmianie i pozostaje do końca miesiąca kalendarzowego. Wykorzystane dni zawieszenia zostaną odebrane jako bezpłatny bonus po 12. racie.
                       </div>
                       {previewNote && (
                         <div className={`text-[10px] font-bold mt-1.5 p-2 rounded-lg ${breakdown.weekdaysCount === 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-sky-100/60 text-sky-800'}`}>
@@ -3907,7 +4013,7 @@ export default function KarnetyPage() {
                       </div>
                       {discountCodeStatus.message && (
                          <div className={`text-[10px] font-bold mt-1 ${discountCodeStatus.type === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {discountCodeStatus.message}
+                           {discountCodeStatus.message}
                          </div>
                       )}
                     </div>
@@ -4142,7 +4248,7 @@ export default function KarnetyPage() {
                       </div>
                       {discountCodeStatus.message && (
                          <div className={`text-[10px] font-bold mt-1 ${discountCodeStatus.type === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {discountCodeStatus.message}
+                           {discountCodeStatus.message}
                          </div>
                       )}
                     </div>
