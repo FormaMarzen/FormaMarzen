@@ -451,7 +451,7 @@ export default function WydarzeniaPage() {
     const basePrice = parsePrice(originalPrice);
     if (basePrice <= 0) return null;
     
-    if (!activeDiscountDetails) return { originalPrice, finalPriceStr: originalPrice, discountAmount: 0 };
+    if (!activeDiscountDetails) return { originalPrice, finalPriceStr: originalPrice, discountAmount: 0, discountText: "", isOneTime: false };
     
     let discountValue = 0;
     
@@ -1059,6 +1059,7 @@ export default function WydarzeniaPage() {
     const koszulkiCount = Array.isArray(w.koszulki_zamowienia) ? w.koszulki_zamowienia.length : 0;
     const oplaconeZadatekCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "zadatek").length : 0;
     const oplaconeCaloscCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "calosc").length : 0;
+    const eventPriceDetails = !isPast ? calculateDiscountedPrice(w.cena) : null;
 
     return (
       <div 
@@ -1081,6 +1082,13 @@ export default function WydarzeniaPage() {
               !
             </span>
           </div>
+        )}
+
+        {activeDiscountDetails && eventPriceDetails?.discountAmount && eventPriceDetails.discountAmount > 0 && !isAdmin && !isPast && (
+           <div className={`absolute z-20 top-3 ${unread ? 'right-11' : 'right-3'} bg-emerald-500 text-white px-2.5 py-1 rounded-xl shadow-md border border-emerald-400 flex items-center gap-1.5 transform rotate-3 origin-top-right group-hover:rotate-0 transition-transform`}>
+             <span className="text-[10px] font-black uppercase tracking-widest leading-none mt-px">Zniżka</span>
+             <span className="text-xs font-black leading-none">-{eventPriceDetails.discountText}</span>
+           </div>
         )}
 
         <div className="h-48 w-full bg-slate-100 relative overflow-hidden">
@@ -1141,10 +1149,17 @@ export default function WydarzeniaPage() {
             )}
           </div>
 
-          <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between">
+          <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between relative">
             <div className="flex flex-col">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cena wydarzenia</span>
-              <span className="font-black text-sky-900 text-base">{w.cena || "Darmowe"}</span>
+              {activeDiscountDetails && eventPriceDetails?.discountAmount && eventPriceDetails.discountAmount > 0 && !isAdmin && !isPast ? (
+                <div className="flex flex-col mt-0.5">
+                  <span className="line-through text-slate-400 text-[10px] font-medium leading-none">{eventPriceDetails.originalPrice}</span>
+                  <span className="font-black text-emerald-600 text-base leading-tight">{eventPriceDetails.finalPriceStr}</span>
+                </div>
+              ) : (
+                <span className="font-black text-sky-900 text-base">{w.cena || "Darmowe"}</span>
+              )}
             </div>
 
             {w.zadatek && (
@@ -1179,7 +1194,7 @@ export default function WydarzeniaPage() {
   const selectedIsClosed = selectedEvent ? isZapisyZamkniete(selectedEvent) : false;
   const koszulkiExpired = selectedEvent ? isKoszulkiZamkniete(selectedEvent) : false;
   const enrolledInSelected = isUserZapisany(selectedEvent);
-  const mapsLink = selectedEvent ? getGoogleMapsLink(selectedEvent.google_maps_url, selectedEvent.zbiorka) : null;
+  const mapsLink = selectedEvent ? getGoogleMapsLink(selectedEvent?.google_maps_url, selectedEvent?.zbiorka) : null;
   const priceDetails = selectedEvent ? calculateDiscountedPrice(selectedEvent.cena) : null;
 
   const hasAnyParticipantModule = selectedEvent && (
@@ -1234,6 +1249,25 @@ export default function WydarzeniaPage() {
           )}
         </div>
       </div>
+
+      {activeDiscountDetails && !isAdmin && (
+        <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-2xl p-4 sm:p-5 shadow-lg border border-emerald-400 text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in slide-in-from-top-4 duration-500">
+          <div className="flex items-start sm:items-center gap-3">
+            <span className="text-3xl sm:text-4xl drop-shadow-md">🎁</span>
+            <div>
+              <h3 className="font-black text-sm sm:text-base uppercase tracking-wider drop-shadow-sm">
+                Twój {activeDiscountDetails.type === 'jednorazowy' ? 'jednorazowy ' : 'stały '}rabat klubowicza
+              </h3>
+              <p className="text-emerald-50 text-xs sm:text-sm font-medium mt-0.5">
+                Automatycznie obniżamy ceny wydarzeń o <strong className="font-black text-white bg-emerald-600/50 px-2 py-0.5 rounded-lg ml-1 border border-emerald-400/50">{formatDiscountAmount(activeDiscountDetails.amount || 0, activeDiscountDetails.unit || 'PLN')}</strong>
+                {activeDiscountDetails.expiration && (
+                  <span className="ml-1 opacity-90">(ważny do {formatDatePL(activeDiscountDetails.expiration)})</span>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {wydarzenia.length === 0 && (
         <div className="text-center py-20 bg-white rounded-3xl border border-sky-100 border-dashed">
@@ -1291,7 +1325,7 @@ export default function WydarzeniaPage() {
             
             {/* Plakat główny */}
             <div className="w-full bg-slate-900 relative flex justify-center items-center overflow-hidden group min-h-[220px] max-h-[60vh]">
-              {selectedEvent.grafika_url ? (
+              {selectedEvent?.grafika_url ? (
                 <>
                   <div 
                     className="absolute inset-0 opacity-40 blur-2xl bg-cover bg-center scale-110" 
@@ -1300,7 +1334,7 @@ export default function WydarzeniaPage() {
                   <img 
                     src={selectedEvent.grafika_url} 
                     alt="Plakat wydarzenia" 
-                    onClick={() => setPreviewImage(selectedEvent.grafika_url)}
+                    onClick={() => setPreviewImage(selectedEvent.grafika_url!)}
                     className="relative z-10 w-full h-full object-contain max-h-[60vh] drop-shadow-2xl cursor-zoom-in hover:scale-[1.02] transition-transform duration-300" 
                     title="Kliknij, aby powiększyć plakat"
                   />
@@ -1330,7 +1364,7 @@ export default function WydarzeniaPage() {
                     🎁 Posiadasz aktywny rabat: {priceDetails.discountText}
                   </div>
                 )}
-                <h2 className="text-2xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tighter break-words">{selectedEvent.tytul}</h2>
+                <h2 className="text-2xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tighter break-words">{selectedEvent?.tytul}</h2>
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
               </div>
 
@@ -1341,7 +1375,7 @@ export default function WydarzeniaPage() {
                   <div className="w-full">
                     <div className="text-[10px] font-bold text-sky-500 uppercase tracking-widest leading-tight">Termin</div>
                     <div className="h-3.5"></div>
-                    <div className="font-black text-sky-950 text-xs sm:text-sm mt-0.5">{formatTermin(selectedEvent.data_od, selectedEvent.data_do)}</div>
+                    <div className="font-black text-sky-950 text-xs sm:text-sm mt-0.5">{formatTermin(selectedEvent?.data_od || "", selectedEvent?.data_do || "")}</div>
                   </div>
                 </div>
 
@@ -1362,7 +1396,7 @@ export default function WydarzeniaPage() {
                            <span className="text-emerald-600 text-base">{priceDetails.finalPriceStr}</span>
                          </>
                        ) : (
-                         <span>{selectedEvent.cena || "Darmowe"}</span>
+                         <span>{selectedEvent?.cena || "Darmowe"}</span>
                        )}
                     </div>
                   </div>
@@ -1371,7 +1405,7 @@ export default function WydarzeniaPage() {
                   )}
                 </div>
                 
-                {selectedEvent.zadatek ? (
+                {selectedEvent?.zadatek ? (
                   <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-orange-100">
                     <span className="text-2xl">🟡</span>
                     <div className="w-full">
@@ -1396,12 +1430,13 @@ export default function WydarzeniaPage() {
                     </div>
                   </div>
                 )}
+
                 {/* Pole Dopłaty Reszty Kwoty */}
                 <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-indigo-100">
                   <span className="text-2xl">🟢</span>
                   <div className="w-full">
                     <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest leading-tight">Reszta kwoty</div>
-                    {selectedEvent.reszta_do ? (
+                    {selectedEvent?.reszta_do ? (
                       <div className="text-[9px] font-semibold text-indigo-400 mt-0.5 leading-tight">
                         (do {formatDatePL(selectedEvent.reszta_do)})
                       </div>
@@ -1410,9 +1445,9 @@ export default function WydarzeniaPage() {
                     )}
                     <div className="font-black text-indigo-950 text-xs sm:text-sm mt-0.5">
                        {activeDiscountDetails && priceDetails?.discountAmount && priceDetails.discountAmount > 0 && !isAdmin ? (
-                         obliczReszteKwoty(priceDetails.finalPriceStr, selectedEvent.zadatek)
+                         obliczReszteKwoty(priceDetails.finalPriceStr, selectedEvent?.zadatek)
                        ) : (
-                         obliczReszteKwoty(selectedEvent.cena, selectedEvent.zadatek)
+                         obliczReszteKwoty(selectedEvent?.cena, selectedEvent?.zadatek)
                        )}
                     </div>
                   </div>
@@ -1426,21 +1461,21 @@ export default function WydarzeniaPage() {
                 </h3>
                 {activeDiscountDetails && activeDiscountDetails.type === "jednorazowy" && !isAdmin && (
                   <div className="mb-4 bg-amber-50 border border-amber-200 p-4 rounded-xl text-amber-900 text-xs sm:text-sm font-bold shadow-sm">
-                    ⚠️ Posiadasz jednorazowy rabat na wydarzenia. Otrzymasz go po opłaceniu (zadatku lub całości). Zniżka przepadnie, jeśli anulujesz udział!
+                    ⚠️ Posiadasz jednorazowy rabat na wydarzenia. Zostanie on wykorzystany po opłaceniu (zadatku lub całości). Zniżka przepadnie, jeśli anulujesz udział!
                   </div>
                 )}
                 <div className="text-slate-700 text-sm sm:text-base leading-relaxed whitespace-pre-wrap font-medium break-words">
-                  {selectedEvent.opis || "Organizator nie podał jeszcze szczegółowego opisu tego wydarzenia."}
+                  {selectedEvent?.opis || "Organizator nie podał jeszcze szczegółowego opisu tego wydarzenia."}
                 </div>
               </div>
 
               {/* KOMPAKTOWA LISTA UCZESTNIKÓW */}
-              {selectedEvent.uczestnicy && selectedEvent.uczestnicy.length > 0 && (
+              {(selectedEvent?.uczestnicy || []).length > 0 && (
                 <div className="bg-white p-5 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-sky-100 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-sky-50 pb-3">
                     <div>
                       <h3 className="font-black text-xs sm:text-sm text-sky-950 uppercase tracking-widest flex items-center gap-2">
-                        <span>👥</span> Lista uczestników ({selectedEvent.uczestnicy.length})
+                        <span>👥</span> Lista uczestników ({(selectedEvent?.uczestnicy || []).length})
                       </h3>
                       {isAdmin && (
                         <p className="text-[11px] text-slate-400 font-medium mt-0.5">
@@ -1458,17 +1493,17 @@ export default function WydarzeniaPage() {
                     {isAdmin && (
                       <div className="flex items-center gap-1.5 text-[11px] font-bold">
                         <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200">
-                          Zadatek: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === "zadatek").length}
+                          Zadatek: {(selectedEvent?.uczestnicy || []).filter(u => u.status_platnosci === "zadatek").length}
                         </span>
                         <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-900 border border-emerald-200">
-                          Całość: {selectedEvent.uczestnicy.filter(u => u.status_platnosci === "calosc").length}
+                          Całość: {(selectedEvent?.uczestnicy || []).filter(u => u.status_platnosci === "calosc").length}
                         </span>
                       </div>
                     )}
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {selectedEvent.uczestnicy.map((u, idx) => {
+                    {(selectedEvent?.uczestnicy || []).map((u, idx) => {
                       const badge = getPaymentBadge(u.status_platnosci);
                       const isMe = currentUserEmail && u.email && u.email.toLowerCase() === currentUserEmail.toLowerCase();
 
@@ -1521,7 +1556,7 @@ export default function WydarzeniaPage() {
                   </div>
 
                   {/* Moduł WhatsApp */}
-                  {selectedEvent.pokaz_whatsapp && selectedEvent.whatsapp_url && (
+                  {selectedEvent?.pokaz_whatsapp && selectedEvent?.whatsapp_url && (
                     <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-3">
                         <span className="text-3xl shrink-0">💬</span>
@@ -1542,7 +1577,7 @@ export default function WydarzeniaPage() {
                   )}
 
                   {/* Moduł Zbiórka / Lokalizacja z Google Maps */}
-                  {selectedEvent.pokaz_zbiorka && selectedEvent.zbiorka && (
+                  {selectedEvent?.pokaz_zbiorka && selectedEvent?.zbiorka && (
                     <div className="bg-white p-5 rounded-2xl border border-amber-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                       <div className="space-y-1">
                         <h4 className="text-xs font-black text-amber-900 uppercase tracking-wider flex items-center gap-2">
@@ -1564,7 +1599,7 @@ export default function WydarzeniaPage() {
                   )}
 
                   {/* Moduł Ekwipunek */}
-                  {selectedEvent.pokaz_ekwipunek && selectedEvent.ekwipunek && (
+                  {selectedEvent?.pokaz_ekwipunek && selectedEvent?.ekwipunek && (
                     <div className="bg-white p-5 rounded-2xl border border-sky-100">
                       <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider mb-2 flex items-center gap-2">
                         <span>🎒</span> Co należy ze sobą zabrać (Ekwipunek)
@@ -1576,7 +1611,7 @@ export default function WydarzeniaPage() {
                   )}
 
                   {/* Moduł Opis Strefy */}
-                  {selectedEvent.pokaz_opis_strefy && selectedEvent.strefa_opis && (
+                  {selectedEvent?.pokaz_opis_strefy && selectedEvent?.strefa_opis && (
                     <div className="bg-white p-5 rounded-2xl border border-sky-100">
                       <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider mb-2 flex items-center gap-2">
                         <span>📋</span> Szczegółowy plan wyjazdu & wytyczne
@@ -1588,13 +1623,13 @@ export default function WydarzeniaPage() {
                   )}
 
                   {/* Moduł Plany / Harmonogram Graficzny */}
-                  {selectedEvent.pokaz_plan_grafika && selectedEvent.plan_grafiki && selectedEvent.plan_grafiki.length > 0 && (
+                  {selectedEvent?.pokaz_plan_grafika && (selectedEvent?.plan_grafiki || []).length > 0 && (
                     <div className="space-y-3">
                       <h4 className="text-xs font-black text-sky-900 uppercase tracking-wider flex items-center gap-2">
-                        <span>🗺️</span> Graficzny harmonogram wyjazdu ({selectedEvent.plan_grafiki.length})
+                        <span>🗺️</span> Graficzny harmonogram wyjazdu ({(selectedEvent?.plan_grafiki || []).length})
                       </h4>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {selectedEvent.plan_grafiki.map((imgUrl, idx) => (
+                        {(selectedEvent?.plan_grafiki || []).map((imgUrl, idx) => (
                           <div 
                             key={idx} 
                             onClick={() => setPreviewImage(imgUrl)} 
@@ -1616,7 +1651,7 @@ export default function WydarzeniaPage() {
                   )}
 
                   {/* Moduł Koszulki Treningowe */}
-                  {selectedEvent.pokaz_koszulki && (
+                  {selectedEvent?.pokaz_koszulki && (
                     <div className="bg-white p-5 sm:p-7 rounded-2xl sm:rounded-3xl border-2 border-indigo-200 shadow-sm space-y-6">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-indigo-50 pb-4">
                         <div className="flex items-center gap-3">
@@ -1630,13 +1665,13 @@ export default function WydarzeniaPage() {
                         </div>
 
                         <div className="flex items-center gap-2 flex-wrap">
-                          {selectedEvent.koszulki_cena && (
+                          {selectedEvent?.koszulki_cena && (
                             <div className="bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-xl text-center">
                               <div className="text-[9px] font-bold text-indigo-500 uppercase tracking-wider">Cena koszulki</div>
                               <div className="font-black text-indigo-950 text-xs">{selectedEvent.koszulki_cena}</div>
                             </div>
                           )}
-                          {selectedEvent.koszulki_termin && (
+                          {selectedEvent?.koszulki_termin && (
                             <div className="bg-rose-50 border border-rose-100 px-3 py-1.5 rounded-xl text-center">
                               <div className="text-[9px] font-bold text-rose-500 uppercase tracking-wider">Zapisy i płatność do</div>
                               <div className="font-black text-rose-950 text-xs">{formatDatePL(selectedEvent.koszulki_termin)}</div>
@@ -1701,7 +1736,7 @@ export default function WydarzeniaPage() {
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-50 pb-3">
                             <div>
                               <h4 className="font-black text-xs sm:text-sm text-sky-950 uppercase tracking-widest flex items-center gap-2">
-                                <span>👕</span> Zamówienia koszulek ({selectedEvent.koszulki_zamowienia?.length || 0})
+                                <span>👕</span> Zamówienia koszulek ({(selectedEvent?.koszulki_zamowienia || []).length})
                               </h4>
                               <p className="text-[11px] text-slate-400 font-medium mt-0.5">
                                 💡 Kliknij w status płatności, aby go szybko przełączyć. (Klubowicze widzą tylko swoje zamówienie)
@@ -1715,14 +1750,14 @@ export default function WydarzeniaPage() {
                                 </span>
                               ))}
                               <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-md text-[10px] font-black">
-                                Opłacone: {(selectedEvent.koszulki_zamowienia || []).filter(z => z.status_platnosci === "calosc").length} / {selectedEvent.koszulki_zamowienia?.length || 0}
+                                Opłacone: {(selectedEvent?.koszulki_zamowienia || []).filter(z => z.status_platnosci === "calosc").length} / {(selectedEvent?.koszulki_zamowienia || []).length}
                               </span>
                             </div>
                           </div>
 
-                          {(selectedEvent.koszulki_zamowienia || []).length > 0 ? (
+                          {(selectedEvent?.koszulki_zamowienia || []).length > 0 ? (
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                              {selectedEvent.koszulki_zamowienia?.map((z, zIdx) => {
+                              {(selectedEvent?.koszulki_zamowienia || []).map((z, zIdx) => {
                                 const isPaid = z.status_platnosci === "calosc";
                                 return (
                                   <div 
@@ -1766,13 +1801,13 @@ export default function WydarzeniaPage() {
                         </div>
                       )}
 
-                      {selectedEvent.koszulki_opis && (
+                      {selectedEvent?.koszulki_opis && (
                         <div className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed bg-slate-50 p-4 rounded-2xl border border-slate-100 font-medium break-words">
                           {selectedEvent.koszulki_opis}
                         </div>
                       )}
 
-                      {selectedEvent.koszulki_grafika_glowna && (
+                      {selectedEvent?.koszulki_grafika_glowna && (
                         <div className="space-y-2">
                           <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider block">Wizualizacja koszulki</span>
                           <div 
@@ -1792,13 +1827,13 @@ export default function WydarzeniaPage() {
                         </div>
                       )}
 
-                      {selectedEvent.koszulki_grafiki && selectedEvent.koszulki_grafiki.length > 0 && (
+                      {(selectedEvent?.koszulki_grafiki || []).length > 0 && (
                         <div className="space-y-2 pt-2 border-t border-indigo-50">
                           <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider block">
-                            📐 Tabela rozmiarów & Warianty ({selectedEvent.koszulki_grafiki.length})
+                            📐 Tabela rozmiarów & Warianty ({(selectedEvent?.koszulki_grafiki || []).length})
                           </span>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {selectedEvent.koszulki_grafiki.map((imgUrl, idx) => (
+                            {(selectedEvent?.koszulki_grafiki || []).map((imgUrl, idx) => (
                               <div 
                                 key={idx} 
                                 onClick={() => setPreviewImage(imgUrl)} 
@@ -1839,7 +1874,7 @@ export default function WydarzeniaPage() {
                   Zamów oficjalną koszulkę
                 </h3>
                 <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                  Koszt: <strong className="text-indigo-900">{selectedEvent.koszulki_cena || "110 zł"}</strong> (płatność online Autopay)
+                  Koszt: <strong className="text-indigo-900">{selectedEvent?.koszulki_cena || "110 zł"}</strong> (płatność online Autopay)
                 </p>
               </div>
               <button onClick={() => setIsMemberKoszulkaModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer">✕</button>
