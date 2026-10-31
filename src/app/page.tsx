@@ -1263,9 +1263,9 @@ export default function DashboardPage() {
           const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
           const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-          // ZABEZPIECZENIE: Odwołanie może nastąpić tylko W OKNIE czasowym przed startem (diffMinutes > 5).
-          // Jeśli trening się rozpoczął lub trwa (diffMinutes <= 0), nie odwołujemy go!
-          if (diffMinutes <= deadlineMins && diffMinutes > 5) {
+          // POPRAWKA: Jeśli minął termin na zebranie minimalnej liczby osób (diffMinutes <= deadlineMins),
+          // zajęcia zostają trwale odwołane i zapisane w bazie, również jeśli trening już się zbliża lub rozpoczął
+          if (diffMinutes <= deadlineMins) {
             const classSignupsFromMap = signupsMap[cls.classKey] || [];
             const activeSignupsFromMap = classSignupsFromMap.filter((s: any) => s.status === 'zapisany');
 
@@ -1289,17 +1289,18 @@ export default function DashboardPage() {
             if (activeSignups.length < minRequired) {
               hasChanges = true;
               
-              for (const vKey of allVariantKeys) {
-                await supabase.from('nadpisania_zajec').upsert({
-                  class_key: vKey,
-                  start: cls.start,
-                  end: cls.end,
-                  trainer: cls.trainer,
-                  limit: cls.limit,
-                  is_odwolane: true,
-                  is_usuniete: false
-                }, { onConflict: 'class_key' });
-              }
+              // TRWAŁE ODWOŁANIE W BAZIE (bezawaryjne delete + insert zamiast upsert onConflict)
+              await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
+              const rowsToInsert = allVariantKeys.map(vKey => ({
+                class_key: vKey,
+                start: cls.start,
+                end: cls.end,
+                trainer: cls.trainer,
+                limit: cls.limit,
+                is_odwolane: true,
+                is_usuniete: false
+              }));
+              await supabase.from('nadpisania_zajec').insert(rowsToInsert);
 
               const participantIds: number[] = [];
               const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
@@ -1412,22 +1413,23 @@ export default function DashboardPage() {
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-      // Odwołanie tylko gdy do startu zostało więcej niż 5 minut (nie w minucie startu ani po)
-      if (diffMinutes <= deadlineMins && diffMinutes > 5) {
+      // POPRAWKA: Odwołanie natychmiastowe po wypisaniu uczestnika, gdy czas do zajęć minął deadline
+      if (diffMinutes <= deadlineMins) {
         const classKey = `${classItem.id}_${displayDate}`;
         const allVariantKeys = getKeysVariants(classItem.id, displayDate);
 
-        for (const vKey of allVariantKeys) {
-          await supabase.from('nadpisania_zajec').upsert({
-            class_key: vKey,
-            start: classItem.start,
-            end: classItem.end,
-            trainer: classItem.trainer,
-            limit: classItem.limit || 12,
-            is_odwolane: true,
-            is_usuniete: false
-          }, { onConflict: 'class_key' });
-        }
+        // TRWAŁE ODWOŁANIE W BAZIE (delete + insert zamiast upsert onConflict)
+        await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
+        const rowsToInsert = allVariantKeys.map(vKey => ({
+          class_key: vKey,
+          start: classItem.start,
+          end: classItem.end,
+          trainer: classItem.trainer,
+          limit: classItem.limit || 12,
+          is_odwolane: true,
+          is_usuniete: false
+        }));
+        await supabase.from('nadpisania_zajec').insert(rowsToInsert);
 
         const participantIds: number[] = [];
         const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
@@ -1489,7 +1491,6 @@ export default function DashboardPage() {
     }
     return false;
   };
-
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
     if (!classItem || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
     if (classItem.isOdwołane) return { isAutoCancelled: true, reason: 'ODWOŁANE PRZEZ KLUB' };
@@ -1531,8 +1532,8 @@ export default function DashboardPage() {
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-      // Status auto-odwołania widoczny tylko przed startem (diffMinutes > 0)
-      if (diffMinutes <= deadlineMins && diffMinutes > 0) {
+      // Usunięto ograniczenie diffMinutes > 0: jeśli minął termin auto-odwołania, zajęcia pozostają trwale odwołane
+      if (diffMinutes <= deadlineMins) {
         const activeCount = Array.isArray(signups) ? signups.filter(s => s.status === 'zapisany').length : 0;
         if (activeCount < minRequired) {
           return {
@@ -2724,17 +2725,18 @@ export default function DashboardPage() {
     const classKey = `${editClassModalData.id}_${editClassModalData.displayDate}`;
     const allVariantKeys = getKeysVariants(editClassModalData.id, editClassModalData.displayDate);
 
-    for (const vKey of allVariantKeys) {
-      await supabase.from('nadpisania_zajec').upsert({
-        class_key: vKey,
-        start: newStart,
-        end: newEnd,
-        trainer: editTrainer,
-        limit: newLimitNum,
-        is_odwolane: editClassModalData.isOdwołane || false,
-        is_usuniete: editClassModalData.isUsunięte || false
-      }, { onConflict: 'class_key' });
-    }
+    // TRWAŁY ZAPIS EDYCJI ZAJĘĆ (delete + insert zamiast zawodnego upsert onConflict)
+    await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
+    const rowsToInsert = allVariantKeys.map(vKey => ({
+      class_key: vKey,
+      start: newStart,
+      end: newEnd,
+      trainer: editTrainer,
+      limit: newLimitNum,
+      is_odwolane: editClassModalData.isOdwołane || false,
+      is_usuniete: editClassModalData.isUsunięte || false
+    }));
+    await supabase.from('nadpisania_zajec').insert(rowsToInsert);
 
     const durationText = calculateDuration(newStart, newEnd);
     await supabase.from('transakcje').insert([{
@@ -2800,6 +2802,7 @@ export default function DashboardPage() {
     const zapisani = dbSignups || [];
     const participantIds: number[] = Array.from(new Set(zapisani.map((s: any) => Number(s.klient_id)).filter(Boolean)));
 
+    // Usuwamy stare nadpisania dla wszystkich wariantów klucza
     await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
 
     if (nextOdwołaneState) {
@@ -2856,6 +2859,7 @@ export default function DashboardPage() {
 
       await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
 
+      // TRWAŁE ZAPISANIE ODWOŁANIA W BAZIE (insert zamiast upsert onConflict)
       const rowsToInsert = allVariantKeys.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
@@ -2865,9 +2869,9 @@ export default function DashboardPage() {
         is_odwolane: true,
         is_usuniete: item.isUsunięte || false
       }));
-      await supabase.from('nadpisania_zajec').upsert(rowsToInsert, { onConflict: 'class_key' });
+      await supabase.from('nadpisania_zajec').insert(rowsToInsert);
     } else {
-      // PRZYWRÓCENIE ZAJĘĆ
+      // PRZYWRÓCENIE ZAJĘĆ (trwały insert z is_odwolane: false)
       const rowsToInsert = allVariantKeys.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
@@ -2877,7 +2881,7 @@ export default function DashboardPage() {
         is_odwolane: false,
         is_usuniete: item.isUsunięte || false
       }));
-      await supabase.from('nadpisania_zajec').upsert(rowsToInsert, { onConflict: 'class_key' });
+      await supabase.from('nadpisania_zajec').insert(rowsToInsert);
     }
 
     setNadpisaneZajeciaDni(prev => {
@@ -2964,6 +2968,7 @@ export default function DashboardPage() {
       await supabase.from('nadpisania_zajec').delete().in('class_key', keysToDelete);
 
       if (nextUsunięteState) {
+        // TRWAŁY ZAPIS USUNIĘCIA (insert zamiast upsert onConflict)
         const rowsToInsert = keysToDelete.map(vKey => ({
           class_key: vKey,
           start: item.start || '08:00',
@@ -2973,7 +2978,7 @@ export default function DashboardPage() {
           is_odwolane: item.isOdwołane || false,
           is_usuniete: true
         }));
-        await supabase.from('nadpisania_zajec').upsert(rowsToInsert, { onConflict: 'class_key' });
+        await supabase.from('nadpisania_zajec').insert(rowsToInsert);
       }
     }
 
@@ -2998,7 +3003,6 @@ export default function DashboardPage() {
     await loadData();
     showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały pomyślnie przywrócone!");
   };
-
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
     const safePayload = { ...payload };
     if (safePayload.karnetyKlubowicza !== undefined) {
@@ -4487,7 +4491,6 @@ export default function DashboardPage() {
         obecny: false,
         nieobecny: false
       };
-
       setZapisyNaZajecia(prev => {
         const updated = { ...prev };
         allVariantKeys.forEach(vk => {
@@ -6058,8 +6061,7 @@ export default function DashboardPage() {
                   if (appRole === 'klubowicz' && item.isUsunięte) return false;
                   return true;
                 });
-
-              const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
+                const jednorazoweDnia = czyObózAktywny ? [] : jednorazoweZajecia
                 .filter((item: any) => item.displayDate === col.date)
                 .map((item: any) => {
                   const classKey = `${item.id}_${col.date}`;
@@ -7494,7 +7496,6 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-
       {/* MODAL: PROFIL KLUBOWICZA */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
