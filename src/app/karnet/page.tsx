@@ -912,14 +912,14 @@ export default function KarnetyPage() {
       continuityPercent: 0, 
       birthdayPercent: 0, 
       daysLeftBirthday: bStatus.daysLeft, 
-      isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear,
+      isBirthdayUsedThisYear: bStatus.alreadyUsedThisYear, 
       ambassadorPercent: 0, 
       ambassadorTierName: '', 
-      ambassadorTierId: null,
-      isPassQualifiedForAmbassador,
-      refereePercent: 0,
-      refereeTierName: '',
-      isPassQualifiedForReferee
+      ambassadorTierId: null, 
+      isPassQualifiedForAmbassador, 
+      refereePercent: 0, 
+      refereeTierName: '', 
+      isPassQualifiedForReferee 
     };
   };
 
@@ -1094,7 +1094,6 @@ export default function KarnetyPage() {
                     k.waznyDo = truePaidUntil;
                     karnetyChanged = true;
                   } else if (k.waznyDo && !isLastDayOfMonth(k.waznyDo)) {
-                    // Jeśli waznyDo zostało sztucznie przesunięte przez poprzednie zawieszenie (np. 2026-12-12), cofnij do ostatniego dnia poprzedniego miesiąca (2026-11-30)
                     const parts = k.waznyDo.split('-').map(Number);
                     if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1])) {
                       const prevMonthLast = new Date(parts[0], parts[1] - 1, 0);
@@ -1105,8 +1104,7 @@ export default function KarnetyPage() {
                   }
                 }
 
-                // AUTOMATYCZNE ODWIESZENIE PO UPŁYWIE TERMINU ZAWIESZENIA DLA UMOWY 12M:
-                // Zdejmuje flagę zawieszenia bez przedłużania waznyDo (dni zawieszenia są bezpieczne w totalSuspendedDaysUsed)
+                // AUTOMATYCZNE ODWIESZENIE PO UPŁYWIE TERMINU ZAWIESZENIA DLA UMOWY 12M
                 if (k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo < todayDateOnly) {
                   k.zawieszonyOd = null;
                   k.zawieszonyDo = null;
@@ -1117,7 +1115,7 @@ export default function KarnetyPage() {
                 }
               }
 
-              // AUTOMATYCZNE ODWIESZENIE DLA KARNETÓW STANDARDOWYCH (DODANIE DNI DO WAZNYDO)
+              // AUTOMATYCZNE ODWIESZENIE DLA KARNETÓW STANDARDOWYCH
               if (!isContractPassCheck(k)) {
                 if (k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo < todayDateOnly) {
                   const startD = new Date(k.zawieszonyOd);
@@ -1227,7 +1225,7 @@ export default function KarnetyPage() {
               const isTimeBased = defPrimary?.typ_karnetu === 'Na czas' || (!isQuantityPassCheck(primaryPass) && !isContractPassCheck(primaryPass));
 
               const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) || 
-                                       (isTimeBased && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
+                                        (isTimeBased && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0);
 
               if (isPrimaryFinished && waitingPassIndex !== -1) {
                 const nextPass = tempKarnety[waitingPassIndex];
@@ -1634,7 +1632,6 @@ export default function KarnetyPage() {
       }
     }
   }, []);
-
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
@@ -1703,6 +1700,7 @@ export default function KarnetyPage() {
     setObrazekUrl(item.obrazekUrl || null);
     setIsModalOpen(true);
   };
+
   const handleToggleZajecie = (nazwaZajec: string) => {
     if (zaznaczoneZajecia.includes(nazwaZajec)) {
       setZaznaczoneZajecia(zaznaczoneZajecia.filter(z => z !== nazwaZajec));
@@ -1797,7 +1795,7 @@ export default function KarnetyPage() {
     return true;
   });
 
-  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY UMOWY (Z PEŁNĄ DYNAMICZNĄ OBSŁUGĄ MIANOWNIKA X/Y ORAZ BLOKADĄ ANTY-DUPLIKACYJNĄ)
+  // PRZEDŁUŻENIE KARNETU / OPŁATA RATY UMOWY (Z PEŁNĄ OBSŁUGĄ MIANOWNIKA X/Y ORAZ ZAWIESZENIA)
   const handleExtendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !passToExtend || isProcessingPayment || isSubmittingRef.current) return;
@@ -1895,6 +1893,8 @@ export default function KarnetyPage() {
           if (isContract) {
             if (isBonus13thPeriod) {
               statusFinalTekst = `Umowa 12M (Bonus z zawieszenia: +${bonusDaysAmount} dni • Ważny do: ${nowaDataWygasnieciaStr})`;
+            } else if (k.zawieszonyOd) {
+              statusFinalTekst = `Umowa 12M (Rata ${nextRataStr}) - Zawieszony (od ${k.zawieszonyOd} do ${k.zawieszonyDo || 'odwołania'})`;
             } else {
               statusFinalTekst = `Umowa 12M (Rata ${nextRataStr} • Ważny do: ${nowaDataWygasnieciaStr})`;
             }
@@ -2160,7 +2160,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ I ZAMKNIĘCIEM STAREGO (Z BLOKADĄ WIELOKLIKU I WYKLUCZENIEM Z CIĄGŁOŚCI KARNETÓW <= 150 ZŁ I 0 ZŁ)
+  // ZAKUP NOWEGO KARNETU Z PRZENIESIENIEM WEJŚĆ
   const handleBuyPassSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !selectedBuyPass) return;
@@ -2170,7 +2170,6 @@ export default function KarnetyPage() {
     setIsProcessingPayment(true);
 
     try {
-      // 1. Zabezpieczenie przed podwójnym kliknięciem dla karnetów 0 PLN (np. Medicover) w bazie
       const fifteenSecondsAgo = new Date(Date.now() - 15000).toISOString();
       const { data: recentPurchases } = await supabase
         .from('transakcje')
@@ -2232,13 +2231,11 @@ export default function KarnetyPage() {
       const nowyStanPortfelaStr = `${nowyStanPortfela.toFixed(2)} PLN`;
       const discountAmount = Math.max(0, calculatedFirstPayment - cenaPoRabacie);
 
-      // Karnety darmowe (0 zł / Medicover) oraz <= 150 zł NIE biorą udziału w programie ciągłości
       const isFreeOrLowCost = calculatedFirstPayment <= 150 || basePriceNum <= 150 || cenaPoRabacie === 0 || selectedBuyPass.toLowerCase().includes('medicover');
 
       const limitWejscBaza = defKarnetu ? (defKarnetu.ilosc_wejsc || defKarnetu.limitWejsc || defKarnetu.wejscia || null) : null;
       let nowaDataWygasnieciaStr = '';
 
-      // Wyliczanie najwyższego dotychczasowego cyklu – wyłącznie z płatnych karnetów powyżej 150 zł
       let baseCykl = 1;
       const eligiblePaidPasses = updatedKarnetyList.filter(k => {
         const pPrice = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
@@ -2249,7 +2246,6 @@ export default function KarnetyPage() {
         baseCykl = Math.max(...eligiblePaidPasses.map(k => (typeof k.cykl === 'number' ? k.cykl : 1)));
       }
 
-      // Karnet darmowy lub <= 150 zł ma ZAWSZE cykl 1 i NIE podbija progresji
       let nextCykl = (isContract || isFreeOrLowCost) 
         ? 1 
         : (appliedDiscountCode ? baseCykl : (eligiblePaidPasses.length === 0 ? 1 : baseCykl + 1));
@@ -2362,7 +2358,6 @@ export default function KarnetyPage() {
       let finalRabatInt = typeof currentUser.rabat === 'number' ? currentUser.rabat : (extractClientContinuityDiscount(currentUser) ?? 0);
       let finalCyklInt = currentUser.cyklCiaglosci || 1;
 
-      // Cykl ciągłości oraz rabat podbijamy TYLKO dla karnetów powyżej 150 zł
       if (!isContract && !appliedDiscountCode && !isFreeOrLowCost && calculatedFirstPayment > 150) {
         const currentContinuityVal = effectiveDiscount.continuityPercent || 0;
         let nextContinuityVal = currentContinuityVal;
@@ -2645,7 +2640,7 @@ export default function KarnetyPage() {
     }
   };
 
-  // ZATWIERDZENIE ZAWIESZENIA (ZASADA DLA UMÓW 12M: BRAK PRZEDŁUŻANIA WAZNYDO NA BIEŻĄCO - WAŻNOŚĆ ZOSTAJE DO KOŃCA MIESIĄCA!)
+  // ZATWIERDZENIE ZAWIESZENIA
   const handleSuspendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSuspendError('');
@@ -2827,8 +2822,6 @@ export default function KarnetyPage() {
     try {
       let newExtendedExpiry = targetKarnet.waznyDo;
       
-      // KLUCZOWA ZASADA: DLA UMÓW 12M NIE PRZEDŁUŻAMY WAZNYDO NA BIEŻĄCO!
-      // Ważność pozostaje sztywno do końca opłaconego miesiąca kalendarzowego.
       if (!isContract && targetKarnet.waznyDo) {
         const parts = targetKarnet.waznyDo.split('-');
         if (parts.length === 3) {
@@ -2978,7 +2971,6 @@ export default function KarnetyPage() {
 
       const unusedDaysRefund = Math.max(0, plannedDeducted - actualDeducted);
 
-      // Dla umów 12M ważność nie była wydłużana, więc nie cofamy waznyDo!
       let correctedExpiryDate = targetKarnet.waznyDo;
       if (!isContractPassCheck(targetKarnet) && unusedDaysRefund > 0 && targetKarnet.waznyDo) {
         const parts = targetKarnet.waznyDo.split('-');
@@ -3456,7 +3448,6 @@ export default function KarnetyPage() {
                         </div>
                       </div>
                     </div>
-
                     {isLatePaymentBlocked && (
                       <div className="bg-rose-50 border border-rose-300 text-rose-800 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in">
                         <div className="flex items-center gap-2.5">
@@ -3479,14 +3470,16 @@ export default function KarnetyPage() {
                       </div>
                     )}
                     <div className="border-t border-slate-100 pt-4 flex flex-wrap justify-end gap-2">
-                      {isSuspendedLocal ? (
+                      {isSuspendedLocal && (
                         <button 
                           onClick={() => { setPassToUnsuspendId(karnet.id.toString()); setIsUnsuspendModalOpen(true); }}
                           className="bg-slate-800 border border-slate-900 text-white hover:bg-slate-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
                         >
                           <span className="text-sm">🔓</span> ODWIEŚ KARNET
                         </button>
-                      ) : isContract ? (
+                      )}
+
+                      {isContract ? (
                         contractInfo.canActivateBonus ? (
                           <button 
                             onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
@@ -3502,25 +3495,27 @@ export default function KarnetyPage() {
                             <span className="text-sm">💳</span> {isLatePaymentBlocked ? 'OPŁAĆ ZALEGŁĄ RATĘ' : 'OPŁAĆ KOLEJNĄ RATĘ'}
                           </button>
                         ) : null
-                      ) : isQuantity ? (
-                        <button 
-                          onClick={() => {
-                            resetDiscountState();
-                            setSelectedBuyPass(karnet.nazwa);
-                            setIsBuyPassModalOpen(true);
-                          }}
-                          className="bg-blue-600 hover:bg-blue-700 text-white font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
-                        >
-                          <span className="text-sm">🎟️</span> KUP NOWY KARNET
-                        </button>
-                      ) : (
-                        <button 
-                          onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
-                          className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
-                        >
-                          <span className="text-sm">🕒</span> PRZEDŁUŻ
-                        </button>
-                      )}
+                      ) : !isSuspendedLocal ? (
+                        isQuantity ? (
+                          <button 
+                            onClick={() => {
+                              resetDiscountState();
+                              setSelectedBuyPass(karnet.nazwa);
+                              setIsBuyPassModalOpen(true);
+                            }}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-black text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                          >
+                            <span className="text-sm">🎟️</span> KUP NOWY KARNET
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={() => { resetDiscountState(); setPassToExtend(karnet); setIsExtendModalOpen(true); }}
+                            className="bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 hover:border-sky-300 hover:text-sky-900 font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                          >
+                            <span className="text-sm">🕒</span> PRZEDŁUŻ
+                          </button>
+                        )
+                      ) : null}
                     </div>
                   </div>
                 );
@@ -3652,6 +3647,7 @@ export default function KarnetyPage() {
             </div>
           </div>
         </div>
+
         {/* MODAL ZASAD ZAWIESZEŃ */}
         {isSuspendInfoModalOpen && (
           <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
