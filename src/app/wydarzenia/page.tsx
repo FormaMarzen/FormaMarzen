@@ -970,14 +970,15 @@ export default function WydarzeniaPage() {
     }
   };
 
-  const formatDatePL = (dateString?: string | null) => {
-    if (!dateString) return "";
-    const parts = dateString.split("-");
-    if (parts.length === 3) {
-      return `${parts[2]}.${parts[1]}.${parts[0]}`;
-    }
-    return dateString;
-  };
+ const formatDatePL = (dateString?: string | null) => {
+  if (!dateString) return "";
+  const cleanDate = dateString.split("T")[0];
+  const parts = cleanDate.split("-");
+  if (parts.length === 3) {
+    return `${parts[2]}.${parts[1]}.${parts[0]}`;
+  }
+  return cleanDate;
+};
 
   const formatTermin = (od: string, doDnia: string) => {
     const sOd = formatDatePL(od);
