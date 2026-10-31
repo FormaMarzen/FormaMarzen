@@ -143,7 +143,7 @@ const getCalendarExpiryDate = (startDateStr: string, limitCzasowyStr?: string): 
   }
 };
 
-// KULOODPORNY PARSER DAT Z CLASS_KEY (OBSŁUGA PREFIKSÓW NP. j_15_05/10)
+// KULOODPORNY PARSER DAT Z CLASS_KEY
 const parseDateFromClassKey = (classKey: string): Date => {
   if (!classKey) return new Date();
   const lastUnderscore = classKey.lastIndexOf('_');
@@ -180,15 +180,15 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
-// POMOCNIK WYLICZANIA DNI ZAWIESZENIA W BIEŻĄCYM KWARTALE (Q1: sty-mar, Q2: kwi-cze, Q3: lip-wrz, Q4: paź-gru)
+// POMOCNIK WYLICZANIA DNI ZAWIESZENIA W BIEŻĄCYM KWARTALE
 const getSuspensionDaysInCurrentQuarter = (
   suspensions: any[], 
   activeSuspension?: { od?: string | null; do?: string | null }
 ): { days: number; quarterCode: string; quarterLabel: string } => {
   const today = new Date();
   const currentYear = today.getFullYear();
-  const currentMonth = today.getMonth(); // 0-11
-  const qIndex = Math.floor(currentMonth / 3); // 0=Q1, 1=Q2, 2=Q3, 3=Q4
+  const currentMonth = today.getMonth();
+  const qIndex = Math.floor(currentMonth / 3);
   const qCodes = ['Q1', 'Q2', 'Q3', 'Q4'];
   const qLabels = ['I kwartał', 'II kwartał', 'III kwartał', 'IV kwartał'];
   const currentQCode = qCodes[qIndex];
@@ -628,6 +628,13 @@ export default function KlienciPage() {
   const [isEditingSystemDiscount, setIsEditingSystemDiscount] = useState(false);
   const [systemDiscountInput, setSystemDiscountInput] = useState('');
 
+  // STANY DLA RABATU NA OBÓZ / WYDARZENIE
+  const [isEditingCampDiscount, setIsEditingCampDiscount] = useState(false);
+  const [campDiscountTypeInput, setCampDiscountTypeInput] = useState<'jednorazowy' | 'staly'>('jednorazowy');
+  const [campDiscountAmountInput, setCampDiscountAmountInput] = useState('');
+  const [campDiscountUnitInput, setCampDiscountUnitInput] = useState<'PLN' | '%'>('PLN');
+  const [campDiscountExpirationInput, setCampDiscountExpirationInput] = useState('');
+
   const [isPassHistoryOpen, setIsPassHistoryOpen] = useState(false);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -949,7 +956,7 @@ export default function KlienciPage() {
         typ_operacji: 'zajecia_wypis',
         kwota: null,
         class_key: zajecieItem.classKey || null,
-        opis: `${profileClient.firstName} ${profileClient.lastName} - Wypisanie z treningu przez klub: ${sessionName} (${sessionDate}).${zwrocicWejscie ? ' Zwrócono 1 wejście do puli.' : ''}`
+        opis: `${profileClient.firstName} ${profileClient.lastName} Wypisanie z treningu przez klub: ${sessionName} (${sessionDate}).${zwrocicWejscie ? ' Zwrócono 1 wejście do puli.' : ''}`
       }]);
 
       await loadData(profileClient.id);
@@ -1024,7 +1031,7 @@ export default function KlienciPage() {
         klient_id: profileClient.id,
         typ_operacji: 'zajecia_wypis',
         kwota: null,
-        opis: `${profileClient.firstName} ${profileClient.lastName} - Masowe wypisanie ze wszystkich nadchodzących zajęć (${upcomingItems.length} treningów) przez klub.${zwrocicWejscia ? ` Zwrócono ${upcomingItems.length} wejść do puli.` : ''}`
+        opis: `${profileClient.firstName} ${profileClient.lastName} Masowe wypisanie ze wszystkich nadchodzących zajęć (${upcomingItems.length} treningów) przez klub.${zwrocicWejscia ? ` Zwrócono ${upcomingItems.length} wejść do puli.` : ''}`
       }]);
 
       alert(`Pomyślnie wypisano ze wszystkich ${upcomingItems.length} nadchodzących zajęć.`);
@@ -1122,7 +1129,6 @@ export default function KlienciPage() {
           }
         });
       }
-
       const enrichedPromises = klienciData.map(async (c: any) => {
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => String(t.klient_id) === String(c.id)) : [];
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
@@ -1239,7 +1245,7 @@ export default function KlienciPage() {
                   if (!k.waznyDo || k.waznyDo < tomorrowStr) {
                     k.waznyDo = tomorrowStr;
                   }
-                  k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - bufor ciągłości)`;
+                  k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} bufor ciągłości)`;
                 }
               }
             }
@@ -1453,6 +1459,10 @@ export default function KlienciPage() {
           ...c,
           _rawKeys: Object.keys(c),
           id: c.id,
+          camp_discount_type: c.camp_discount_type || null,
+          camp_discount_amount: c.camp_discount_amount !== null && c.camp_discount_amount !== undefined ? Number(c.camp_discount_amount) : null,
+          camp_discount_unit: c.camp_discount_unit || null,
+          camp_discount_expiration: c.camp_discount_expiration || null,
           rabat: currentRabat,
           systemDiscountOffset: currentOffset,
           hasLostContinuity: hasLostContinuity,
@@ -1518,6 +1528,10 @@ export default function KlienciPage() {
 
   const openProfile = async (clientToOpen: any) => {
     setProfileClient(clientToOpen);
+    setCampDiscountTypeInput(clientToOpen.camp_discount_type === 'staly' ? 'staly' : 'jednorazowy');
+    setCampDiscountAmountInput(clientToOpen.camp_discount_amount !== null && clientToOpen.camp_discount_amount !== undefined ? String(clientToOpen.camp_discount_amount) : '');
+    setCampDiscountUnitInput(clientToOpen.camp_discount_unit === '%' ? '%' : 'PLN');
+    setCampDiscountExpirationInput(clientToOpen.camp_discount_expiration ? String(clientToOpen.camp_discount_expiration).split('T')[0] : '');
     loadData(clientToOpen.id);
   };
 
@@ -1590,6 +1604,80 @@ export default function KlienciPage() {
     setProfileClient(updatedClient);
     setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
     setIsEditingSystemDiscount(false);
+  };
+
+  const handleSaveCampDiscount = async () => {
+    if (!profileClient || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+
+    try {
+      const amountVal = campDiscountAmountInput.trim() !== '' ? parseFloat(campDiscountAmountInput) : null;
+      const expirationVal = campDiscountExpirationInput.trim() !== '' ? campDiscountExpirationInput : null;
+
+      const payload = {
+        camp_discount_type: campDiscountTypeInput,
+        camp_discount_amount: amountVal,
+        camp_discount_unit: campDiscountUnitInput,
+        camp_discount_expiration: expirationVal
+      };
+
+      const { error } = await supabase.from('klienci').update(payload).eq('id', profileClient.id);
+
+      if (error) {
+        alert(`Błąd zapisu rabatu na obóz w bazie: ${error.message}`);
+        return;
+      }
+
+      const updatedClient = {
+        ...profileClient,
+        ...payload
+      };
+
+      setProfileClient(updatedClient);
+      setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
+      setIsEditingCampDiscount(false);
+      alert("Rabat na obóz został pomyślnie zapisany!");
+      loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
+    }
+  };
+
+  const handleRemoveCampDiscount = async () => {
+    if (!profileClient || isSubmittingRef.current) return;
+    if (!confirm("Czy na pewno chcesz usunąć rabat na obóz temu klubowiczowi?")) return;
+    isSubmittingRef.current = true;
+
+    try {
+      const payload = {
+        camp_discount_type: null,
+        camp_discount_amount: null,
+        camp_discount_unit: null,
+        camp_discount_expiration: null
+      };
+
+      const { error } = await supabase.from('klienci').update(payload).eq('id', profileClient.id);
+
+      if (error) {
+        alert(`Błąd usuwania rabatu na obóz: ${error.message}`);
+        return;
+      }
+
+      const updatedClient = {
+        ...profileClient,
+        ...payload
+      };
+
+      setProfileClient(updatedClient);
+      setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
+      setCampDiscountAmountInput('');
+      setCampDiscountExpirationInput('');
+      setIsEditingCampDiscount(false);
+      alert("Rabat na obóz został usunięty.");
+      loadData(profileClient.id);
+    } finally {
+      isSubmittingRef.current = false;
+    }
   };
 
   const handleAddClientSubmit = async (e: React.FormEvent) => {
@@ -1975,7 +2063,7 @@ export default function KlienciPage() {
             znizkaProcentowa: znizkaTekst,
             rata: isContract ? updatedRata : (k.rata || '1 / 1'),
             isContract12M: isContract,
-            statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata} • Ważny do: ${targetExpiryDate})` : `Ważny do: ${targetExpiryDate}`,
+            statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata} Ważny do: ${targetExpiryDate})` : `Ważny do: ${targetExpiryDate}`,
             pozostaloWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.pozostaloWejsc || 0) + parsedExtWejscia) : k.pozostaloWejsc),
             poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.poczatkoweWejsc || 0) + parsedExtWejscia) : k.poczatkoweWejsc),
             zeroEntriesGraceUntil: null,
@@ -2132,7 +2220,7 @@ export default function KlienciPage() {
         cena: cenaObjKarnetu,
         znizkaProcentowa: znizkaTekst,
         rata: isContract ? (newPassCustomRata || '0 / 12') : '1 / 1',
-        statusTekst: isContract ? `Umowa 12M (Rata ${newPassCustomRata || '0 / 12'} • Ważny do: ${dataWygasnieciaStr})` : `Ważny do: ${dataWygasnieciaStr}`,
+        statusTekst: isContract ? `Umowa 12M (Rata ${newPassCustomRata || '0 / 12'} Ważny do: ${dataWygasnieciaStr})` : `Ważny do: ${dataWygasnieciaStr}`,
         isContract12M: isContract,
         contractSuspensionDaysLeft: isContract ? (parseInt(newPassCustomSuspensionDays, 10) || 30) : undefined,
         blokadaDo: null,
@@ -2563,7 +2651,7 @@ export default function KlienciPage() {
         klient_id: profileClient.id,
         typ_operacji: 'edycja_karnetu',
         kwota: null,
-        opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Cena: ${editingPassModal.cena}, Rata:${editingPassModal.rata})` : ''}`
+        opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Cena: ${editingPassModal.cena}, Rata: ${editingPassModal.rata})` : ''}`
       }]);
 
       setEditingPassModal(null);
@@ -2622,7 +2710,6 @@ export default function KlienciPage() {
             opis: `Automatycznie wypisano z ${cancelledCount} przyszłych zajęć z powodu usunięcia karnetu.`
           }]);
         }
-
         await supabase.from('transakcje').insert([{
           klient_id: profileClient.id,
           typ_operacji: 'edycja_karnetu',
@@ -2639,7 +2726,6 @@ export default function KlienciPage() {
       }
     }
   };
-
   const handleTopUpWalletSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !walletAmountInput || isSubmittingRef.current) return;
@@ -3448,6 +3534,30 @@ export default function KlienciPage() {
                          </div>
                        )}
                     </div>
+
+                    {/* NOWO DODANY: RABAT NA OBÓZ / WYDARZENIE */}
+                    <div className="flex items-center gap-2 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-200" title="Rabat na obozy sportowe i wydarzenia klubowe">
+                       <span className="text-[10px] font-bold text-purple-800 uppercase whitespace-nowrap">Rabat na obóz:</span>
+                       <div className="flex items-center gap-1.5 cursor-pointer group" onClick={() => {
+                         setCampDiscountTypeInput(profileClient.camp_discount_type === 'staly' ? 'staly' : 'jednorazowy');
+                         setCampDiscountAmountInput(profileClient.camp_discount_amount !== null && profileClient.camp_discount_amount !== undefined ? String(profileClient.camp_discount_amount) : '');
+                         setCampDiscountUnitInput(profileClient.camp_discount_unit === '%' ? '%' : 'PLN');
+                         setCampDiscountExpirationInput(profileClient.camp_discount_expiration ? String(profileClient.camp_discount_expiration).split('T')[0] : '');
+                         setIsEditingCampDiscount(true);
+                       }}>
+                         {profileClient.camp_discount_amount && profileClient.camp_discount_amount > 0 ? (
+                           <span className="font-black text-purple-700 text-xs flex items-center gap-1">
+                             <span>{profileClient.camp_discount_amount} {profileClient.camp_discount_unit || 'PLN'}</span>
+                             <span className="text-[9px] font-bold text-purple-600">
+                               ({profileClient.camp_discount_type === 'staly' ? 'stały' : 'jednorazowy'}{profileClient.camp_discount_expiration ? `, do ${profileClient.camp_discount_expiration.split('T')[0]}` : ''})
+                             </span>
+                           </span>
+                         ) : (
+                           <span className="font-black text-slate-400 text-xs">Brak</span>
+                         )}
+                         <span className="opacity-40 group-hover:opacity-100 text-xs transition-opacity">✏️</span>
+                       </div>
+                    </div>
                   </div>
                   
                   <div className="flex items-center gap-2">
@@ -3925,7 +4035,7 @@ export default function KlienciPage() {
                                     </span>
                                   </td>
                                   <td className="py-3 px-4 whitespace-nowrap">
-                                    <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border ${
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
                                       item.isClientSignup 
                                         ? 'bg-blue-50 text-blue-950 border-blue-200' 
                                         : 'bg-slate-100 text-slate-800 border-slate-200 font-black'
@@ -3996,7 +4106,6 @@ export default function KlienciPage() {
                               statusObecnosci = '🔴 NIEOBECNY';
                               obecnoscKlasa = 'bg-rose-100 text-rose-800 border-rose-300 font-black';
                             }
-
                             const authorAudit = resolveAuthorAndMovementDetails(profileClient.id, z.class_key, wszystkieTransakcje, z.zapisujacy, false);
 
                             pastClassesList.push({
@@ -5208,7 +5317,117 @@ export default function KlienciPage() {
         </div>
       )}
 
+      {/* MODAL: EDYCJA RABATU NA OBÓZ / WYDARZENIE */}
+      {isEditingCampDiscount && profileClient && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-purple-200">
+            <div className="flex items-center justify-between border-b border-purple-100 pb-3">
+              <h3 className="font-black text-sm text-purple-950 uppercase tracking-wider flex items-center gap-2">
+                <span>🏕️</span> Rabat na obóz / wydarzenia
+              </h3>
+              <button onClick={() => setIsEditingCampDiscount(false)} className="text-slate-400 font-bold cursor-pointer hover:text-slate-700">✕</button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Typ rabatu *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCampDiscountTypeInput('jednorazowy')}
+                    className={`py-2 px-3 rounded-xl font-bold border transition-all cursor-pointer text-center ${
+                      campDiscountTypeInput === 'jednorazowy'
+                        ? 'bg-purple-100 border-purple-400 text-purple-950 shadow-xs'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Jednorazowy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCampDiscountTypeInput('staly')}
+                    className={`py-2 px-3 rounded-xl font-bold border transition-all cursor-pointer text-center ${
+                      campDiscountTypeInput === 'staly'
+                        ? 'bg-purple-100 border-purple-400 text-purple-950 shadow-xs'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Stały
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 items-end">
+                <div className="col-span-2 space-y-1">
+                  <label className="font-bold text-slate-700 block">Wartość rabatu *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={campDiscountAmountInput}
+                    onChange={(e) => setCampDiscountAmountInput(e.target.value)}
+                    placeholder="np. 100 lub 10"
+                    className="w-full bg-slate-50 border border-purple-200 rounded-xl px-3 py-2 font-bold text-slate-800 focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Jednostka</label>
+                  <select
+                    value={campDiscountUnitInput}
+                    onChange={(e) => setCampDiscountUnitInput(e.target.value as 'PLN' | '%')}
+                    className="w-full bg-slate-50 border border-purple-200 rounded-xl px-3 py-2 font-bold text-slate-800 cursor-pointer focus:outline-none focus:border-purple-500"
+                  >
+                    <option value="PLN">PLN</option>
+                    <option value="%">%</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Data ważności rabatu (opcjonalnie)</label>
+                <input
+                  type="date"
+                  value={campDiscountExpirationInput}
+                  onChange={(e) => setCampDiscountExpirationInput(e.target.value)}
+                  className="w-full bg-slate-50 border border-purple-200 rounded-xl px-3 py-2 font-bold text-slate-800 cursor-pointer focus:outline-none focus:border-purple-500"
+                />
+                <span className="text-[10px] text-slate-400">Pozostaw puste, jeżeli rabat ma być bezterminowy.</span>
+              </div>
+
+              <div className="pt-3 flex justify-between items-center gap-2 border-t border-purple-100">
+                {profileClient.camp_discount_amount && profileClient.camp_discount_amount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={handleRemoveCampDiscount}
+                    className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3 py-2 rounded-xl transition-colors cursor-pointer"
+                  >
+                    🗑️ Usuń rabat
+                  </button>
+                ) : (
+                  <div></div>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingCampDiscount(false)}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Anuluj
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveCampDiscount}
+                    className="bg-purple-700 hover:bg-purple-800 text-white font-black px-5 py-2 rounded-xl transition-colors cursor-pointer shadow-sm uppercase tracking-wider"
+                  >
+                    Zapisz rabat
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
-
