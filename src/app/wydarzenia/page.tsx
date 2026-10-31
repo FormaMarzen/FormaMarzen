@@ -30,6 +30,10 @@ interface KlientBaza {
   imie: string;
   nazwisko: string;
   email?: string;
+  camp_discount_type?: string | null;
+  camp_discount_amount?: number | null;
+  camp_discount_unit?: string | null;
+  camp_discount_expiration?: string | null;
 }
 
 interface Wydarzenie {
@@ -85,11 +89,25 @@ export const obliczReszteKwoty = (cena?: string | null, zadatek?: string | null)
   return `${roznica} PLN`;
 };
 
+// Funkcja pomocnicza do formatowania waluty/procentów
+const formatDiscountAmount = (amount: number, unit: string) => {
+  if (unit === '%') {
+    return `${amount}%`;
+  }
+  return `${amount} PLN`;
+};
+
 export default function WydarzeniaPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [currentUserId, setCurrentUserId] = useState<number | string | null>(null);
   const [currentClientName, setCurrentClientName] = useState({ imie: "", nazwisko: "" });
+  const [currentUserDiscount, setCurrentUserDiscount] = useState<{
+    type: string | null;
+    amount: number | null;
+    unit: string | null;
+    expiration: string | null;
+  } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isProcessingAutopay, setIsProcessingAutopay] = useState(false);
@@ -313,7 +331,7 @@ export default function WydarzeniaPage() {
       const [sessionRes, wydarzeniaRes, klienciRes] = await Promise.all([
         supabase.auth.getSession(),
         supabase.from("wydarzenia").select("*").order("data_od", { ascending: true }),
-        supabase.from("klienci").select('id, "Imię", "Nazwisko", "E-mail"')
+        supabase.from("klienci").select('id, "Imię", "Nazwisko", "E-mail", camp_discount_type, camp_discount_amount, camp_discount_unit, camp_discount_expiration')
       ]);
 
       const email = sessionRes.data.session?.user?.email || "";
@@ -331,7 +349,11 @@ export default function WydarzeniaPage() {
           id: k.id,
           imie: (k["Imię"] || k.imie || "").trim(),
           nazwisko: (k["Nazwisko"] || k.nazwisko || "").trim(),
-          email: (k["E-mail"] || k.email || "").trim()
+          email: (k["E-mail"] || k.email || "").trim(),
+          camp_discount_type: k.camp_discount_type,
+          camp_discount_amount: k.camp_discount_amount ? Number(k.camp_discount_amount) : null,
+          camp_discount_unit: k.camp_discount_unit,
+          camp_discount_expiration: k.camp_discount_expiration
         }));
         setKlienciBaza(mappedKlienci);
 
@@ -339,6 +361,15 @@ export default function WydarzeniaPage() {
         if (currentProfile) {
           setCurrentUserId(currentProfile.id);
           setCurrentClientName({ imie: currentProfile.imie, nazwisko: currentProfile.nazwisko });
+          
+          if (currentProfile.camp_discount_type && currentProfile.camp_discount_amount) {
+            setCurrentUserDiscount({
+              type: currentProfile.camp_discount_type,
+              amount: currentProfile.camp_discount_amount,
+              unit: currentProfile.camp_discount_unit ?? null,
+              expiration: currentProfile.camp_discount_expiration ?? null
+            });
+          }
         }
       }
 
@@ -399,6 +430,46 @@ export default function WydarzeniaPage() {
     if (isAdmin) return true;
     if (!currentUserEmail) return false;
     return w.uczestnicy.some(u => u.email && u.email.toLowerCase() === currentUserEmail.toLowerCase());
+  };
+  
+  const activeDiscountDetails = useMemo(() => {
+    if (!currentUserDiscount || !currentUserDiscount.amount) return null;
+    
+    if (currentUserDiscount.expiration) {
+      const expDate = new Date(currentUserDiscount.expiration);
+      const today = new Date();
+      if (expDate < today) {
+        return null;
+      }
+    }
+    
+    return currentUserDiscount;
+  }, [currentUserDiscount]);
+
+  const calculateDiscountedPrice = (originalPrice: string | null) => {
+    if (!originalPrice) return null;
+    const basePrice = parsePrice(originalPrice);
+    if (basePrice <= 0) return null;
+    
+    if (!activeDiscountDetails) return { originalPrice, finalPriceStr: originalPrice, discountAmount: 0 };
+    
+    let discountValue = 0;
+    
+    if (activeDiscountDetails.unit === '%') {
+      discountValue = basePrice * (activeDiscountDetails.amount! / 100);
+    } else {
+      discountValue = activeDiscountDetails.amount!;
+    }
+    
+    const finalPrice = Math.max(0, basePrice - discountValue);
+    
+    return {
+      originalPrice,
+      finalPriceStr: `${finalPrice} PLN`,
+      discountAmount: discountValue,
+      discountText: formatDiscountAmount(activeDiscountDetails.amount!, activeDiscountDetails.unit || 'PLN'),
+      isOneTime: activeDiscountDetails.type === 'jednorazowy'
+    };
   };
 
   const userKoszulkaZamowienie = useMemo(() => {
@@ -1109,6 +1180,7 @@ export default function WydarzeniaPage() {
   const koszulkiExpired = selectedEvent ? isKoszulkiZamkniete(selectedEvent) : false;
   const enrolledInSelected = isUserZapisany(selectedEvent);
   const mapsLink = selectedEvent ? getGoogleMapsLink(selectedEvent.google_maps_url, selectedEvent.zbiorka) : null;
+  const priceDetails = selectedEvent ? calculateDiscountedPrice(selectedEvent.cena) : null;
 
   const hasAnyParticipantModule = selectedEvent && (
     (selectedEvent.pokaz_whatsapp && selectedEvent.whatsapp_url) ||
@@ -1253,6 +1325,11 @@ export default function WydarzeniaPage() {
                     🔒 Zapisy zostały zakończone
                   </div>
                 )}
+                {activeDiscountDetails && priceDetails?.discountAmount && priceDetails.discountAmount > 0 && !isAdmin && (
+                  <div className="inline-block bg-emerald-100 text-emerald-800 border border-emerald-300 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider mb-3 ml-2 shadow-sm animate-pulse">
+                    🎁 Posiadasz aktywny rabat: {priceDetails.discountText}
+                  </div>
+                )}
                 <h2 className="text-2xl sm:text-4xl font-black text-sky-950 leading-tight uppercase tracking-tighter break-words">{selectedEvent.tytul}</h2>
                 <div className="w-16 h-1.5 bg-amber-500 mx-auto mt-4 rounded-full"></div>
               </div>
@@ -1268,13 +1345,30 @@ export default function WydarzeniaPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-amber-100">
-                  <span className="text-2xl">💳</span>
-                  <div className="w-full">
+                <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-amber-100 relative overflow-hidden">
+                  <span className="text-2xl z-10 relative">💳</span>
+                  {activeDiscountDetails && priceDetails?.discountAmount && priceDetails.discountAmount > 0 && !isAdmin && (
+                     <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[9px] font-black px-2 py-0.5 rounded-bl-lg z-10 shadow-sm">
+                       -{priceDetails.discountText}
+                     </div>
+                  )}
+                  <div className="w-full z-10 relative">
                     <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest leading-tight">Cena całkowita</div>
                     <div className="h-3.5"></div>
-                    <div className="font-black text-amber-950 text-xs sm:text-sm mt-0.5">{selectedEvent.cena || "Darmowe"}</div>
+                    <div className="font-black text-amber-950 text-xs sm:text-sm mt-0.5 flex flex-col items-center">
+                       {activeDiscountDetails && priceDetails?.discountAmount && priceDetails.discountAmount > 0 && !isAdmin ? (
+                         <>
+                           <span className="line-through text-slate-400 text-[10px] font-medium leading-none">{priceDetails.originalPrice}</span>
+                           <span className="text-emerald-600 text-base">{priceDetails.finalPriceStr}</span>
+                         </>
+                       ) : (
+                         <span>{selectedEvent.cena || "Darmowe"}</span>
+                       )}
+                    </div>
                   </div>
+                  {activeDiscountDetails && priceDetails?.discountAmount && priceDetails.discountAmount > 0 && !isAdmin && (
+                    <div className="absolute inset-0 bg-emerald-50/50 pointer-events-none"></div>
+                  )}
                 </div>
                 
                 {selectedEvent.zadatek ? (
@@ -1302,7 +1396,6 @@ export default function WydarzeniaPage() {
                     </div>
                   </div>
                 )}
-
                 {/* Pole Dopłaty Reszty Kwoty */}
                 <div className="flex flex-col items-center justify-between text-center min-h-[105px] bg-white p-3.5 rounded-2xl shadow-sm border border-indigo-100">
                   <span className="text-2xl">🟢</span>
@@ -1316,7 +1409,11 @@ export default function WydarzeniaPage() {
                       <div className="h-3.5"></div>
                     )}
                     <div className="font-black text-indigo-950 text-xs sm:text-sm mt-0.5">
-                      {obliczReszteKwoty(selectedEvent.cena, selectedEvent.zadatek)}
+                       {activeDiscountDetails && priceDetails?.discountAmount && priceDetails.discountAmount > 0 && !isAdmin ? (
+                         obliczReszteKwoty(priceDetails.finalPriceStr, selectedEvent.zadatek)
+                       ) : (
+                         obliczReszteKwoty(selectedEvent.cena, selectedEvent.zadatek)
+                       )}
                     </div>
                   </div>
                 </div>
@@ -1327,6 +1424,11 @@ export default function WydarzeniaPage() {
                 <h3 className="font-black text-xs sm:text-sm text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
                   <span className="text-lg">📝</span> Informacje ogólne
                 </h3>
+                {activeDiscountDetails && activeDiscountDetails.type === "jednorazowy" && !isAdmin && (
+                  <div className="mb-4 bg-amber-50 border border-amber-200 p-4 rounded-xl text-amber-900 text-xs sm:text-sm font-bold shadow-sm">
+                    ⚠️ Posiadasz jednorazowy rabat na wydarzenia. Otrzymasz go po opłaceniu (zadatku lub całości). Zniżka przepadnie, jeśli anulujesz udział!
+                  </div>
+                )}
                 <div className="text-slate-700 text-sm sm:text-base leading-relaxed whitespace-pre-wrap font-medium break-words">
                   {selectedEvent.opis || "Organizator nie podał jeszcze szczegółowego opisu tego wydarzenia."}
                 </div>
@@ -2577,4 +2679,3 @@ export default function WydarzeniaPage() {
     </div>
   );
 }
-
