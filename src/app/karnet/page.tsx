@@ -242,6 +242,7 @@ const isQuantityPassCheck = (karnet: any): boolean => {
 };
 
 // DYNAMICZNY ODCZYT STANU RATY I MIANOWNIKA (NP. 8/10, 1/12) ORAZ BONUSU
+// POPRAWKA: Zliczanie RZECZYWISTYCH dni z historii zawieszeń zamiast sztywnego 30 - daysLeft!
 const getContractRataInfo = (karnet: any) => {
   if (!karnet || !isContractPassCheck(karnet)) {
     return {
@@ -272,9 +273,19 @@ const getContractRataInfo = (karnet: any) => {
   }
 
   const daysLeft = karnet.contractSuspensionDaysLeft !== undefined ? Number(karnet.contractSuspensionDaysLeft) : 30;
-  const totalSuspUsed = karnet.totalSuspendedDaysUsed !== undefined && karnet.totalSuspendedDaysUsed !== null
-    ? Number(karnet.totalSuspendedDaysUsed)
-    : Math.max(0, 30 - daysLeft);
+  
+  // WYLICZENIE RZECZYWISTYCH DNI ZAWIESZENIA Z HISTORII
+  const passHist = Array.isArray(karnet.historiaZawieszen) ? karnet.historiaZawieszen : [];
+  const actualDaysFromHistory = passHist.reduce((acc: number, item: any) => {
+    const d = parseInt(item.dni ?? item.planowane_dni ?? 0, 10);
+    return acc + (isNaN(d) ? 0 : d);
+  }, 0);
+
+  const totalSuspUsed = actualDaysFromHistory > 0 
+    ? actualDaysFromHistory 
+    : (karnet.totalSuspendedDaysUsed !== undefined && karnet.totalSuspendedDaysUsed !== null 
+        ? Number(karnet.totalSuspendedDaysUsed) 
+        : 0);
 
   const isMaxPaid = rataNum >= maxRata && !isBonusActive;
   const canActivateBonus = isMaxPaid && totalSuspUsed > 0 && !isBonusActive && !karnet.bonusClaimed;
@@ -689,7 +700,6 @@ export default function KarnetyPage() {
       transakcja_id: transakcjaId
     }]);
   };
-
   // KONTROLA CIĄGŁOŚCI Z WYKLUCZENIEM KARNETÓW <= 150 ZŁ I ZEROWANIEM PO PRZERWIE
   const calculateContinuityDiscount = (client: any, basePriceToCheck?: number) => {
     if (!client) return { hasContinuity: false, percent: 0, label: '0% (Brak)' };
@@ -944,7 +954,7 @@ export default function KarnetyPage() {
     };
   };
 
-  // NAPRAWIONA FUNKCJA PRZEKIEROWANIA DO AUTOPAY (USUNIĘTO BLOKADĘ DEADLOCKA)
+  // NAPRAWIONA FUNKCJA PRZEKIEROWANIA DO AUTOPAY
   const redirectToAutopay = async (amount: number, orderId: string, description: string, type: string, metadata: any) => {
     try {
       const response = await fetch('/api/autopay/init', {
@@ -1632,6 +1642,7 @@ export default function KarnetyPage() {
       }
     }
   }, []);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
@@ -1908,6 +1919,7 @@ export default function KarnetyPage() {
             isContract12M: isContract,
             bonusActivated: isBonus13thPeriod ? true : k.bonusActivated,
             bonusClaimed: isBonus13thPeriod ? true : k.bonusClaimed,
+            totalSuspendedDaysUsed: isBonus13thPeriod ? bonusDaysAmount : k.totalSuspendedDaysUsed,
             blokadaDo: isContract ? null : k.blokadaDo,
             powodBlokady: isContract ? null : k.powodBlokady,
             historiaPrzedluzen: nowaHistoria,
@@ -2510,7 +2522,6 @@ export default function KarnetyPage() {
           createdTransactionId
         );
       }
-
       await checkAndEvaluateAmbassadorReferral(currentUser.id, selectedBuyPass, cenaPoRabacie);
 
       await triggerPushNotificationToAdmin(
@@ -2704,8 +2715,17 @@ export default function KarnetyPage() {
       }
     }
 
+    // OBLICZANIE FAKTYCZNIE WYKORZYSTANYCH DNI Z HISTORII (ELIMINACJA BŁĘDNEGO 30 - DNI)
+    const passHist = Array.isArray(targetKarnet.historiaZawieszen) ? targetKarnet.historiaZawieszen : [];
+    const currentUsedFromHistory = passHist.reduce((acc: number, item: any) => {
+      const d = parseInt(item.dni ?? item.planowane_dni ?? 0, 10);
+      return acc + (isNaN(d) ? 0 : d);
+    }, 0);
+
     let newDaysLeft = targetKarnet.contractSuspensionDaysLeft !== undefined ? targetKarnet.contractSuspensionDaysLeft : 30;
-    let newTotalUsed = targetKarnet.totalSuspendedDaysUsed || (30 - newDaysLeft);
+    let newTotalUsed = (targetKarnet.totalSuspendedDaysUsed !== undefined && targetKarnet.totalSuspendedDaysUsed !== null)
+      ? targetKarnet.totalSuspendedDaysUsed
+      : currentUsedFromHistory;
 
     let effectiveDaysToDeduct = requestedDays;
     let effectiveDaysToExtend = requestedDays;
@@ -2720,7 +2740,7 @@ export default function KarnetyPage() {
       }
 
       if (effectiveDaysToDeduct > newDaysLeft) {
-        setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${newDaysLeft} dni z rocznej puli 30 dni (próbujesz wykorzystać ${effectiveDaysToDeduct} dni).`);
+        setSuspendError(`Przekroczono limit zawieszenia dla Umowy 12M. Pozostało Ci ${newDaysLeft} dni z puli zawieszenia (próbujesz wykorzystać ${effectiveDaysToDeduct} dni).`);
         return;
       }
       newDaysLeft = Math.max(0, newDaysLeft - effectiveDaysToDeduct);
@@ -2842,8 +2862,6 @@ export default function KarnetyPage() {
         kto: '📱 Klubowicz (Aplikacja)',
         status: 'aktywne'
       };
-
-      const passHist = targetKarnet.historiaZawieszen || [];
 
       let updatedKarnetyList = [...karnetyList];
       updatedKarnetyList[karnetIndex] = {
@@ -3668,17 +3686,17 @@ export default function KarnetyPage() {
                   <li>
                     <strong>Karnety na Umowę 12M:</strong> Przysługuje Ci łącznie <strong>30 dni darmowego zawieszenia</strong> w roku.
                     <div className="mt-1 pl-2 border-l-2 border-sky-300 space-y-1 text-[11px] text-slate-700">
-                      <div>• <strong>Brak przesuwania ważności na bieżąco:</strong> Bieżąca data ważności karnetu pozostaje zawsze do końca opłaconego miesiąca kalendarzowego.</div>
-                      <div>• <strong>Blokada weekendowa:</strong> Nie można zawiesić karnetu wyłącznie na sobotę i/lub niedzielę.</div>
-                      <div>• <strong>Weekend + 1 dzień roboczy:</strong> Z puli 30 dni odliczany jest <strong>tylko 1 dzień</strong> (za dzień roboczy).</div>
-                      <div>• <strong>Weekend + min. 2 dni robocze:</strong> Odliczane są <strong>pełne dni</strong> kalendarzowe.</div>
+                      <div><strong>Brak przesuwania ważności na bieżąco:</strong> Bieżąca data ważności karnetu pozostaje zawsze do końca opłaconego miesiąca kalendarzowego.</div>
+                      <div><strong>Blokada weekendowa:</strong> Nie można zawiesić karnetu wyłącznie na sobotę i/lub niedzielę.</div>
+                      <div><strong>Weekend + 1 dzień roboczy:</strong> Z puli 30 dni odliczany jest <strong>tylko 1 dzień</strong> (za dzień roboczy).</div>
+                      <div><strong>Weekend + min. 2 dni robocze:</strong> Odliczane są <strong>pełne dni</strong> kalendarzowe.</div>
                     </div>
                     Wszystkie wykorzystane dni zamrożenia po 12. racie zostaną zamienione w <strong>bezpłatny okres bonusowy (0.00 PLN)</strong> przedłużający Twój karnet!
                   </li>
                   <li>
                     <strong>Karnety Standardowe:</strong> Do 14 dni zawieszenia w pojedynczym kwartale.
                     <div className="mt-1 pl-2 border-l-2 border-sky-300 space-y-1 text-[11px] text-slate-700">
-                      <div>• <strong>Zawieszenie na przełomie kwartałów:</strong> Możesz zawiesić karnet <strong>nawet do 28 dni łącznie</strong>, pod warunkiem że w żadnym z kwartałów nie przekroczysz 14 dni (maksymalnie 14 dni w starym kwartale i maksymalnie 14 dni w nowym kwartale).</div>
+                      <div><strong>Zawieszenie na przełomie kwartałów:</strong> Możesz zawiesić karnet <strong>nawet do 28 dni łącznie</strong>, pod warunkiem że w żadnym z kwartałów nie przekroczysz 14 dni (maksymalnie 14 dni w starym kwartale i maksymalnie 14 dni w nowym kwartale).</div>
                     </div>
                   </li>
                   <li><strong>Miesiące wakacyjne (Lipiec / Sierpień):</strong> Możliwość zawieszenia karnetu standardowego 1 raz w miesiącu (do 14 dni). Jeśli karnet był zawieszany w wakacje, zawieszenie we wrześniu nie jest dozwolone.</li>
@@ -3757,7 +3775,6 @@ export default function KarnetyPage() {
                       ⚠️ {suspendError}
                     </div>
                   )}
-
                   <div className="space-y-1.5">
                     <label className="font-bold text-slate-700 block">Karnet do zawieszenia</label>
                     <select 
@@ -3809,7 +3826,7 @@ export default function KarnetyPage() {
                         <span>Dni robocze: {breakdown.weekdaysCount} • Dni weekendowe: {breakdown.weekendDaysCount}</span>
                       </div>
                       <div className="flex justify-between text-sky-950 font-bold border-t border-slate-200 pt-1.5 mt-1">
-                        <span>Do odliczenia z puli 30 dni:</span>
+                        <span>Do odliczenia z puli:</span>
                         <span className="font-black text-sky-700">{breakdown.weekdaysCount === 0 ? '0 dni (blokada)' : `${deductionPreview} ${deductionPreview === 1 ? 'dzień' : 'dni'}`}</span>
                       </div>
                       <div className="text-[10px] text-emerald-800 font-bold bg-emerald-50 border border-emerald-200 p-2 rounded-lg mt-1">
@@ -4817,7 +4834,7 @@ export default function KarnetyPage() {
                   <label className="flex items-center gap-2.5 cursor-pointer">
                     <input 
                       type="checkbox" 
-                      checked={blokujPortfel}
+                      checked={blokujPortfel} 
                       onChange={(e) => setBlokujPortfel(e.target.checked)}
                       className="w-4 h-4 accent-amber-700 rounded cursor-pointer"
                     />
