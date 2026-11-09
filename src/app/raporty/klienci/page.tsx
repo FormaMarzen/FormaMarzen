@@ -670,10 +670,10 @@ export default function KlienciPage() {
     return latest?.cena || '0.00 PLN';
   };
 
-  // NALICZANIE CIĄGŁOŚCI: WYKLUCZAMY KARNETY <= 150 ZŁ (POJEDYNCZE WEJŚCIA)
+  // NALICZANIE CIĄGŁOŚCI: ROZSZERZONY I ODPORNY FILTR TRANSAKCJI
   const calculateStandardSystemDiscount = (client: any) => {
     if (!client) return 0;
-    const utraty = (client.transakcje || []).filter((t: any) => t.typ_operacji === 'utrata_ciaglosci');
+    const utraty = (client.transakcje || []).filter((t: any) => String(t.typ_operacji || '').toLowerCase() === 'utrata_ciaglosci');
     let lastResetDate = '1970-01-01T00:00:00.000Z';
     if (utraty.length > 0) {
       utraty.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -682,22 +682,61 @@ export default function KlienciPage() {
 
     const transakcjeKarnetow = (client.transakcje || []).filter((t: any) => {
       if (new Date(t.created_at) <= new Date(lastResetDate)) return false;
-      const isPassPurchase = t.typ_operacji === 'zakup_karnetu' || 
-        t.typ_operacji === 'zakup_umowy' || 
-        t.typ_operacji === 'oplata_raty_12m' ||
-        t.typ_operacji === 'oplata_raty_12m_autopay' ||
-        (t.opis && (t.opis.toLowerCase().includes('karnet') || t.opis.toLowerCase().includes('przedłużenie') || t.opis.toLowerCase().includes('umow') || t.opis.toLowerCase().includes('rata')));
-      if (!isPassPurchase) return false;
-      if (t.opis && t.opis.toLowerCase().includes('usunięcie')) return false;
 
-      const kwotaTransakcji = Math.abs(parseFloat(String(t.kwota || '0').replace(/[^0-9.-]/g, '')) || 0);
+      const typOp = String(t.typ_operacji || '').toLowerCase();
+      const opis = String(t.opis || '').toLowerCase();
+
+      if (opis.includes('usunięcie')) return false;
+
+      const isPassPurchase = 
+        typOp === 'zakup_karnetu' || 
+        typOp === 'zakup_umowy' || 
+        typOp === 'oplata_raty_12m' ||
+        typOp === 'oplata_raty_12m_autopay' ||
+        typOp === 'zakup_karnetu_autopay' ||
+        typOp === 'pass_purchase' ||
+        typOp === 'pass_extend' ||
+        typOp === 'contract_installment' ||
+        typOp.includes('karnet') || 
+        typOp.includes('umow') || 
+        typOp.includes('oplata_raty') ||
+        opis.includes('karnet') || 
+        opis.includes('przedłuż') || 
+        opis.includes('przedluz') || 
+        opis.includes('umow') || 
+        opis.includes('rata') ||
+        opis.includes('wejsc') ||
+        opis.includes('wejść');
+
+      if (!isPassPurchase) return false;
+
+      // Wyciągamy kwotę z transakcji lub awaryjnie z tekstu w opisie
+      let kwotaTransakcji = Math.abs(parseFloat(String(t.kwota || t.kwota_autopay || '0').replace(/[^0-9.-]/g, '')) || 0);
+      if (kwotaTransakcji === 0 && opis.includes('pln')) {
+        const matchPln = opis.match(/(\d+(?:[.,]\d+)?)\s*pln/i);
+        if (matchPln) {
+          kwotaTransakcji = parseFloat(matchPln[1].replace(',', '.'));
+        }
+      }
+
       if (kwotaTransakcji > 0 && kwotaTransakcji <= 150) return false;
-      if (t.opis && (t.opis.toLowerCase().includes('1 wejście') || t.opis.toLowerCase().includes('pojedyncz'))) return false;
+      if (opis.includes('1 wejście') || opis.includes('1 wejscie') || opis.includes('pojedyncz')) return false;
 
       return true;
     });
 
-    const count = transakcjeKarnetow.length;
+    let count = transakcjeKarnetow.length;
+
+    // Dodatkowy fallback: Jeśli w transakcjach nic jeszcze nie ma, ale klient ma w tablicy aktywny karnet > 150 zł
+    if (count === 0 && Array.isArray(client.karnetyKlubowicza) && client.karnetyKlubowicza.length > 0) {
+      const activeEligible = client.karnetyKlubowicza.some((k: any) => {
+        if (isContractPassCheck(k)) return false;
+        const pCena = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+        return pCena > 150;
+      });
+      if (activeEligible) count = 1;
+    }
+
     if (count <= 0) return 0;
     if (count === 1) return 2;
     if (count === 2) return 4;
@@ -708,15 +747,19 @@ export default function KlienciPage() {
     if (!client) return 0;
     if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') return 0;
 
-    if (client.rabat !== undefined && client.rabat !== null && client.rabat !== '') {
-      const val = parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''));
-      if (!isNaN(val) && val > 0) return val;
-      if (!isNaN(val) && val === 0) return 0;
-    }
+    const manualVal = (client.rabat !== undefined && client.rabat !== null && client.rabat !== '')
+      ? parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''))
+      : null;
 
     const std = calculateStandardSystemDiscount(client);
     const offset = parseFloat(client.systemDiscountOffset || client.system_discount_offset || '0') || 0;
-    return Math.max(0, Math.min(25, std + offset));
+    const computed = Math.max(0, Math.min(25, std + offset));
+
+    if (manualVal !== null && !isNaN(manualVal) && manualVal > 0) {
+      return manualVal;
+    }
+
+    return computed;
   };
 
   const getEffectiveDiscount = (client: any, isContract: boolean = false, basePriceToCheck?: number) => {
@@ -1380,7 +1423,7 @@ export default function KlienciPage() {
           .filter((t: any) => {
             const typ = String(t.typ_operacji || '').toLowerCase();
             const op = String(t.opis || '').toLowerCase();
-            return typ.includes('karnet') || typ.includes('umow') || typ.includes('oplata_raty') || op.includes('karnet') || op.includes('umow');
+            return typ.includes('karnet') || typ.includes('umow') || typ.includes('oplata_raty') || typ.includes('pass_') || op.includes('karnet') || op.includes('umow') || op.includes('wejsc') || op.includes('wejść');
           })
           .map((t: any) => new Date(t.created_at).getTime())
           .sort((a: number, b: number) => b - a)[0] || 0;
@@ -1388,7 +1431,6 @@ export default function KlienciPage() {
         const alreadyLoggedUtrata = clientTransakcje.some((t: any) => 
           t.typ_operacji === 'utrata_ciaglosci' && new Date(t.created_at).getTime() >= lastPassPurchaseTime
         );
-
         if (utrataCiaglosci) {
            if (!hasLostContinuity || currentDiscount > 0 || !alreadyLoggedUtrata) {
                currentDiscount = '';
@@ -2063,7 +2105,7 @@ export default function KlienciPage() {
             znizkaProcentowa: znizkaTekst,
             rata: isContract ? updatedRata : (k.rata || '1 / 1'),
             isContract12M: isContract,
-            statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata} Ważny do: ${targetExpiryDate})` : `Ważny do: ${targetExpiryDate}`,
+            statusTekst: isContract ? `Umowa 12M (Rata ${updatedRata} • Ważny do: ${targetExpiryDate})` : `Ważny do: ${targetExpiryDate}`,
             pozostaloWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.pozostaloWejsc || 0) + parsedExtWejscia) : k.pozostaloWejsc),
             poczatkoweWejsc: (isContract || isTimeBased) ? null : (parsedExtWejscia !== null ? ((k.poczatkoweWejsc || 0) + parsedExtWejscia) : k.poczatkoweWejsc),
             zeroEntriesGraceUntil: null,
@@ -2220,7 +2262,7 @@ export default function KlienciPage() {
         cena: cenaObjKarnetu,
         znizkaProcentowa: znizkaTekst,
         rata: isContract ? (newPassCustomRata || '0 / 12') : '1 / 1',
-        statusTekst: isContract ? `Umowa 12M (Rata ${newPassCustomRata || '0 / 12'} Ważny do: ${dataWygasnieciaStr})` : `Ważny do: ${dataWygasnieciaStr}`,
+        statusTekst: isContract ? `Umowa 12M (Rata ${newPassCustomRata || '0 / 12'} • Ważny do: ${dataWygasnieciaStr})` : `Ważny do: ${dataWygasnieciaStr}`,
         isContract12M: isContract,
         contractSuspensionDaysLeft: isContract ? (parseInt(newPassCustomSuspensionDays, 10) || 30) : undefined,
         blokadaDo: null,
@@ -2632,7 +2674,7 @@ export default function KlienciPage() {
             rata: isContract ? editingPassModal.rata : (editingPassModal.rata || '1 / 1'),
             isContract12M: isContract,
             contractSuspensionDaysLeft: isContract ? (editingPassModal.contractSuspensionDaysLeft !== undefined ? editingPassModal.contractSuspensionDaysLeft : 30) : undefined,
-            statusTekst: isContract ? `Umowa 12M (${editingPassModal.rata || '0 / 12'}) - Ważny do: ${editingPassModal.waznyDo}` : `Ważny do: ${editingPassModal.waznyDo}`
+            statusTekst: isContract ? `Umowa 12M (${editingPassModal.rata || '0 / 12'}) • Ważny do: ${editingPassModal.waznyDo}` : `Ważny do: ${editingPassModal.waznyDo}`
           };
         }
         return k;
@@ -2653,7 +2695,6 @@ export default function KlienciPage() {
         kwota: null,
         opis: `Ręczna modyfikacja ustawień karnetu: ${editingPassModal.nazwa}${isContract ? ` (Cena: ${editingPassModal.cena}, Rata: ${editingPassModal.rata})` : ''}`
       }]);
-
       setEditingPassModal(null);
       alert("Karnet został zaktualizowany!");
       loadData(profileClient.id);
@@ -2726,6 +2767,7 @@ export default function KlienciPage() {
       }
     }
   };
+
   const handleTopUpWalletSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!profileClient || !walletAmountInput || isSubmittingRef.current) return;
@@ -3775,7 +3817,9 @@ export default function KlienciPage() {
                             opis.includes('przedluz') ||
                             opis.includes('umow') ||
                             opis.includes('rata ') ||
-                            opis.includes('rata:')
+                            opis.includes('rata:') ||
+                            opis.includes('wejsc') ||
+                            opis.includes('wejść')
                           );
                         }).length
                       }
@@ -3800,7 +3844,9 @@ export default function KlienciPage() {
                             opis.includes('przedluz') ||
                             opis.includes('umow') ||
                             opis.includes('rata ') ||
-                            opis.includes('rata:')
+                            opis.includes('rata:') ||
+                            opis.includes('wejsc') ||
+                            opis.includes('wejść')
                           );
                         });
 
@@ -4157,7 +4203,6 @@ export default function KlienciPage() {
                       });
 
                       pastClassesList.sort((a, b) => b._sortTime - a._sortTime);
-
                       return (
                         <table className="w-full text-left text-xs min-w-[700px]">
                           <thead>
@@ -4254,6 +4299,7 @@ export default function KlienciPage() {
                             kto = '📱 Klubowicz (Aplikacja)';
                           }
                         }
+
                         if (['zajecia_zapis', 'zajecia_wypis', 'awans_z_krzesełka', 'zajecia_awans_rezerwa'].includes(typOp)) {
                           const mId = `trans_${t.id}`;
                           if (!seenMovementIds.has(mId)) {
