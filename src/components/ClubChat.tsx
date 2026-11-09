@@ -183,6 +183,9 @@ export default function ClubChat() {
   const isUserTouchingRef = useRef<boolean>(false);
   const keepPinnedToBottomRef = useRef<boolean>(true);
 
+  // Flaga zapobiegająca wielokrotnemu sprawdzaniu urodzin w tej samej sesji
+  const birthdayCheckRanRef = useRef<boolean>(false);
+
   // Zapobieganie niepotrzebnym re-renderom przy identycznych danych z pollingu
   const lastGroupMsgSignatureRef = useRef<string>("");
   const lastDirectMsgSignatureRef = useRef<string>("");
@@ -291,7 +294,6 @@ export default function ClubChat() {
       setShowScrollBottomBtn(false);
     }
 
-    // Wielokrokowe dociąganie w trakcie renderowania kart z odznakami, avatarów i gradientów
     const timer1 = setTimeout(() => {
       if (container && keepPinnedToBottomRef.current && !isUserTouchingRef.current) {
         container.scrollTop = container.scrollHeight;
@@ -1002,6 +1004,112 @@ export default function ClubChat() {
     }
   };
 
+  // AUTOMATYCZNE WYSYŁANIE ŻYCZEŃ URODZINOWYCH Z RABATEM -20% W DNIU URODZIN (RANO)
+  const checkAndSendDailyBirthdays = async (clientsList: any[]) => {
+    if (birthdayCheckRanRef.current || !clientsList || clientsList.length === 0) return;
+    birthdayCheckRanRef.current = true;
+
+    const today = new Date();
+    const currentDay = today.getDate();
+    const currentMonth = today.getMonth() + 1; // 1-12
+    const currentYear = today.getFullYear();
+
+    const birthdayClients = clientsList.filter((c: any) => {
+      if (!c || Number(c.id) === SYSTEM_ID || Number(c.id) === 999999999) return false;
+      const rawDate = c["Data urodzenia"] || c.data_urodzenia || c.birthDate || c.birth_date || c.urodziny;
+      if (!rawDate) return false;
+
+      try {
+        let bDay: number | null = null;
+        let bMonth: number | null = null;
+
+        if (typeof rawDate === "string") {
+          if (rawDate.includes("-")) {
+            const parts = rawDate.split("-");
+            if (parts[0].length === 4) {
+              bMonth = parseInt(parts[1], 10);
+              bDay = parseInt(parts[2], 10);
+            } else {
+              bDay = parseInt(parts[0], 10);
+              bMonth = parseInt(parts[1], 10);
+            }
+          } else if (rawDate.includes(".")) {
+            const parts = rawDate.split(".");
+            bDay = parseInt(parts[0], 10);
+            bMonth = parseInt(parts[1], 10);
+          }
+        } else if (rawDate instanceof Date) {
+          bDay = rawDate.getDate();
+          bMonth = rawDate.getMonth() + 1;
+        }
+
+        return bDay === currentDay && bMonth === currentMonth;
+      } catch {
+        return false;
+      }
+    });
+
+    if (birthdayClients.length === 0) return;
+
+    for (const client of birthdayClients) {
+      try {
+        const { data: existingMsg } = await supabase
+          .from("czat_wiadomosci")
+          .select("id, created_at")
+          .eq("odbiorca_id", client.id)
+          .like("tresc", "%okazji urodzin%")
+          .gte("created_at", `${currentYear}-01-01T00:00:00.000Z`)
+          .limit(1);
+
+        if (!existingMsg || existingMsg.length === 0) {
+          const birthdayText = "🎂 Wszystkiego najlepszego z okazji urodzin od całego zespołu FORMA MARZEŃ! 🎉 Z tej okazji przygotowaliśmy dla Ciebie specjalny prezent: 20% rabatu na zakup lub przedłużenie karnetu (do jednorazowego wykorzystania w ciągu 5 dni). Rabat nalicza się automatycznie w Twoim panelu!";
+
+          const birthdayPayload: any = {
+            nadawca_id: SYSTEM_ID,
+            nadawca_nazwa: "Forma Marzeń",
+            nadawca_avatar: null,
+            odbiorca_id: client.id,
+            grupa_id: null,
+            tresc: birthdayText,
+            attachment_url: null,
+            attachment_type: null,
+            attachment_name: null,
+            przeczytana: false,
+            przeczytana_at: null,
+            przypinana: false,
+            reakcje: {},
+            nadawca_rola: "system",
+          };
+
+          const { data: insertedData, error: insertError } = await supabase
+            .from("czat_wiadomosci")
+            .insert([birthdayPayload])
+            .select();
+
+          if (!insertError && insertedData && insertedData.length > 0) {
+            sendChatPushNotification(
+              client.id,
+              "Forma Marzeń",
+              "🎂 Wszystkiego najlepszego z okazji urodzin! Odbierz swój prezent: 20% rabatu na karnet 🎉",
+              "/?tab=karnet"
+            );
+
+            setMessages((prev) => {
+              const map = new Map();
+              prev.forEach((m) => map.set(m.id, m));
+              map.set(insertedData[0].id, insertedData[0]);
+              return Array.from(map.values()).sort(
+                (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Błąd automatycznej wysyłki życzeń urodzinowych:", err);
+      }
+    }
+  };
+
   useEffect(() => {
     const initUser = async () => {
       const {
@@ -1030,6 +1138,7 @@ export default function ClubChat() {
           avatar: c.avatarUrl || c.avatar || null,
           last_seen: c.last_seen || null,
           isSystem: Number(c.id) === SYSTEM_ID,
+          birthDate: c["Data urodzenia"] || c.data_urodzenia || c.birthDate || c.birth_date || c.urodziny || null,
         }));
 
         const hasSystemAccount = enriched.some((c: any) => Number(c.id) === SYSTEM_ID);
@@ -1045,11 +1154,15 @@ export default function ClubChat() {
                 avatar: null,
                 last_seen: null,
                 isSystem: true,
+                birthDate: null,
               },
               ...enriched,
             ];
 
         setKlienci(allUsers);
+
+        // Automatyczne poranne sprawdzenie solenizantów i wysyłka wiadomości z odznaką/rabatem
+        checkAndSendDailyBirthdays(allUsers);
 
         const myProfiles = enriched.filter((c: any) => c.email === userEmail);
         const primaryProfile = myProfiles[0];
@@ -1236,7 +1349,7 @@ export default function ClubChat() {
     }
   };
 
-  // POBIERANIE GŁÓWNYCH WIADOMOŚCI
+  // POBIERANIE WIADOMOŚCI – ŚCIŚLE OGRANICZONE DO CZATÓW GRUPOWYCH ORAZ ROZMÓW ZE SWOIM UDZIAŁEM (OCHRONA PRYWATNOŚCI 1:1)
   const fetchMessages = async () => {
     if (!currentUserId) return;
 
@@ -1254,11 +1367,10 @@ export default function ClubChat() {
         .order("created_at", { ascending: false })
         .limit(3000);
 
-      if (!isAdmin) {
-        query = query.or(
-          `nadawca_id.in.(${myIds.join(",")}),odbiorca_id.in.(${myIds.join(",")})`
-        );
-      }
+      // Zarówno klubowicze, jak i Administrator widzą WYŁĄCZNIE wiadomości ze swoim udziałem oraz posty grupowe
+      query = query.or(
+        `grupa_id.not.is.null,nadawca_id.in.(${myIds.join(",")}),odbiorca_id.in.(${myIds.join(",")})`
+      );
 
       const { data, error } = await query;
       if (!error && data) {
@@ -1321,7 +1433,8 @@ export default function ClubChat() {
             const senderKey = String(newRow.nadawca_id);
             const isDirectMsg = !newRow.grupa_id;
 
-            if (isDirectMsg && !isAdmin) {
+            // ZABEZPIECZENIE: Żaden użytkownik ani administrator nie odbiera obcych prywatnych wiadomości 1:1
+            if (isDirectMsg) {
               const amISender = myActualIds.includes(String(newRow.nadawca_id));
               const amIReceiver = myActualIds.includes(String(newRow.odbiorca_id));
 
@@ -2474,7 +2587,8 @@ export default function ClubChat() {
       const isSenderMe = effectiveIds.includes(sId);
       const isReceiverMe = effectiveIds.includes(rId);
 
-      if (!isSenderMe && !isReceiverMe && !isAdmin) {
+      // ŚCISŁA OCHRONA PRYWATNOŚCI: Wiadomość 1:1 pojawia się na liście TYLKO jeśli jesteś jej nadawcą lub odbiorcą
+      if (!isSenderMe && !isReceiverMe) {
         return;
       }
 
@@ -2609,6 +2723,10 @@ export default function ClubChat() {
 
   const archivedDirectUsers = isAdmin ? displayedUsers.filter((u) => archivedChatIds.includes(`direct_${u.id}`)) : [];
 
+  // Łączna pula wszystkich grup klubowych
+  const allClubGroups = groups.filter((g: any) => g.typ !== "trening" && !g.nazwa?.startsWith("Trening:"));
+  const allClubGroupsCount = allClubGroups.length;
+
   const allMyGroups = groups.filter((g: any) => {
     if (g.typ === "trening" || g.nazwa?.startsWith("Trening:")) return false;
     if (isAdmin) return true;
@@ -2665,7 +2783,7 @@ export default function ClubChat() {
     (m: any) => m.grupa_id && myGroupIds.has(String(m.grupa_id)) && !effectiveIds.includes(String(m.nadawca_id)) && !m.przeczytana
   ).length;
 
-  // 2. ŁĄCZNY LICZNIK NIEPRZECZYTANYCH DO CZERWONEJ KROPKI NA PŁYWAJĄCYM DYMKU
+  // ŁĄCZNY LICZNIK NIEPRZECZYTANYCH DO CZERWONEJ KROPKI NA PŁYWAJĄCYM DYMKU
   const totalUnreadCount = unreadDirect1on1Count + unreadGroupsCount;
 
   const formatLastSeen = (lastSeenString: string | null) => {
@@ -3152,7 +3270,7 @@ export default function ClubChat() {
     return <span>{iconValue}</span>;
   };
 
-  // 3. RENDER CZATU 1:1 – POGRUBIENIE, CZERWONA KROPKA I LICZNIK PRZY NOWYCH WIADOMOŚCIACH
+  // RENDER CZATU 1:1 – POGRUBIENIE, CZERWONA KROPKA I LICZNIK PRZY NOWYCH WIADOMOŚCIACH
   const renderDirectUserItem = (user: any, isPinnedItem: boolean = false) => {
     const isSys = Number(user.id) === SYSTEM_ID;
     const isTargetAdmin =
@@ -3277,7 +3395,7 @@ export default function ClubChat() {
     );
   };
 
-  // 3. RENDER GRUPY – POGRUBIENIE, CZERWONA KROPKA I LICZNIK PRZY NOWYCH WIADOMOŚCIACH
+  // RENDER GRUPY – POGRUBIENIE, CZERWONA KROPKA I LICZNIK PRZY NOWYCH WIADOMOŚCIACH
   const renderGroupItem = (group: any, isPinnedItem: boolean = false) => {
     const isPublic = group.typ === "publiczna";
     const groupUnread = messages.filter(
@@ -3859,7 +3977,7 @@ export default function ClubChat() {
                       activeTab === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
-                    <span>Grupy ({activeMyGroups.length})</span>
+                    <span>Grupy ({allClubGroupsCount})</span>
                     {unreadGroupsCount > 0 && (
                       <span className="bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.2 rounded-full animate-pulse shadow-sm">
                         {unreadGroupsCount}
@@ -4090,7 +4208,7 @@ export default function ClubChat() {
 
                           return (
                             <>
-                              {/* 3. NIEPRZECZYTANE GRUPY WYRÓŻNIONE NA SAMEJ GÓRZE */}
+                              {/* NIEPRZECZYTANE GRUPY WYRÓŻNIONE NA SAMEJ GÓRZE */}
                               {unreadGroupList.length > 0 && (
                                 <div className="space-y-1.5 mb-2">
                                   <div className="text-[10px] font-black uppercase tracking-wider text-rose-600 px-1 flex items-center gap-1">
@@ -4103,7 +4221,7 @@ export default function ClubChat() {
                                 </div>
                               )}
 
-                              {/* PRZYPIĘTE GRUPY (KTÓRE NIE MAJĄ NOWYCH WIADOMOŚCI) */}
+                              {/* PRZYPIĘTE GRUPY (BEZ NOWYCH WIADOMOŚCI) */}
                               {pinnedMyGroups.filter((g: any) => !unreadIds.has(String(g.id))).length > 0 && (
                                 <div className="space-y-1.5">
                                   <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 px-1 flex items-center gap-1">
@@ -4137,7 +4255,7 @@ export default function ClubChat() {
                         {activeMyGroups.length === 0 && archivedMyGroups.length === 0 && (
                           <div className="py-12 text-center text-slate-400 text-xs space-y-1">
                             <div>Nie należysz jeszcze do żadnej grupy.</div>
-                            <p className="text-[10px]">Sprawdź zakładkę "Otwarte" lub "Zamknięte".</p>
+                            <p className="text-[10px]">Sprawdź zakładkę "Otwarte" lub "Zamknięte", aby dołączyć do dyskusji.</p>
                           </div>
                         )}
 
@@ -4545,7 +4663,7 @@ export default function ClubChat() {
                 </div>
               )}
 
-              {/* 1. LISTA WIADOMOŚCI Z OBSŁUGĄ RESIZEOBSERVER I ZAPASEM DOLNYM */}
+              {/* LISTA WIADOMOŚCI Z OBSŁUGĄ RESIZEOBSERVER I ZAPASEM DOLNYM */}
               <div
                 ref={messagesScrollRef}
                 onScroll={handleScroll}
@@ -5447,7 +5565,7 @@ export default function ClubChat() {
         </div>
       )}
 
-      {/* 2. PŁYWAJĄCY DYMEK CZATU Z PULSUJĄCĄ CZERWONĄ KROPKĄ POWIADOMIEŃ */}
+      {/* PŁYWAJĄCY DYMEK CZATU Z PULSUJĄCĄ CZERWONĄ KROPKĄ POWIADOMIEŃ */}
       {!isOpen && (
         <button
           type="button"
