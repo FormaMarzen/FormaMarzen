@@ -670,9 +670,19 @@ export default function KlienciPage() {
     return latest?.cena || '0.00 PLN';
   };
 
-  // NALICZANIE CIĄGŁOŚCI: ROZSZERZONY I ODPORNY FILTR TRANSAKCJI
+  // NALICZANIE CIĄGŁOŚCI: ODPORNY FILTR Z UWZGLĘDNIENIEM WYKLUCZEŃ (UMOWY, MEDICOVER, <= 150 ZŁ, NADRZĘDNOŚĆ RABATU STAŁEGO)
   const calculateStandardSystemDiscount = (client: any) => {
     if (!client) return 0;
+
+    // 1. Nadrzędność rabatu stałego: jeśli klient ma rabat stały, rabat za ciągłość wynosi 0%
+    const stalyRabat = parseFloat(String(client.discount || '0').replace(/[^0-9.]/g, '')) || 0;
+    if (stalyRabat > 0) return 0;
+
+    // 2. Jeśli utracono ciągłość
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') {
+      return 0;
+    }
+
     const utraty = (client.transakcje || []).filter((t: any) => String(t.typ_operacji || '').toLowerCase() === 'utrata_ciaglosci');
     let lastResetDate = '1970-01-01T00:00:00.000Z';
     if (utraty.length > 0) {
@@ -686,31 +696,44 @@ export default function KlienciPage() {
       const typOp = String(t.typ_operacji || '').toLowerCase();
       const opis = String(t.opis || '').toLowerCase();
 
-      if (opis.includes('usunięcie')) return false;
+      // WYKLUCZENIA:
+      // A) Usunięcia karnetów
+      if (opis.includes('usunięcie') || opis.includes('usuniecie')) return false;
 
+      // B) Umowy 12M i raty - NIE budują ciągłości
+      if (
+        typOp.includes('umow') || 
+        opis.includes('umow') || 
+        typOp.includes('rata') || 
+        opis.includes('rata') || 
+        typOp === 'oplata_raty_12m' || 
+        typOp === 'oplata_raty_12m_autopay' || 
+        typOp === 'zakup_umowy'
+      ) {
+        return false;
+      }
+
+      // C) Karnety Medicover - NIE budują ciągłości
+      if (opis.includes('medicover') || typOp.includes('medicover')) return false;
+
+      // D) Wejścia pojedyncze - NIE budują ciągłości
+      if (opis.includes('1 wejście') || opis.includes('1 wejscie') || opis.includes('pojedyncz')) return false;
+
+      // Kwalifikowane typy zakupów karnetów standardowych (w tym zakupy przez Autopay i pakiety wejściowe np. 10 wejść)
       const isPassPurchase = 
         typOp === 'zakup_karnetu' || 
-        typOp === 'zakup_umowy' || 
-        typOp === 'oplata_raty_12m' ||
-        typOp === 'oplata_raty_12m_autopay' ||
-        typOp === 'zakup_karnetu_autopay' ||
+        typOp === 'zakup_karnetu_autopay' || 
         typOp === 'pass_purchase' ||
         typOp === 'pass_extend' ||
-        typOp === 'contract_installment' ||
-        typOp.includes('karnet') || 
-        typOp.includes('umow') || 
-        typOp.includes('oplata_raty') ||
         opis.includes('karnet') || 
         opis.includes('przedłuż') || 
         opis.includes('przedluz') || 
-        opis.includes('umow') || 
-        opis.includes('rata') ||
-        opis.includes('wejsc') ||
+        opis.includes('wejsc') || 
         opis.includes('wejść');
 
       if (!isPassPurchase) return false;
 
-      // Wyciągamy kwotę z transakcji lub awaryjnie z tekstu w opisie
+      // Weryfikacja kwoty: musi być > 150 zł
       let kwotaTransakcji = Math.abs(parseFloat(String(t.kwota || t.kwota_autopay || '0').replace(/[^0-9.-]/g, '')) || 0);
       if (kwotaTransakcji === 0 && opis.includes('pln')) {
         const matchPln = opis.match(/(\d+(?:[.,]\d+)?)\s*pln/i);
@@ -719,18 +742,20 @@ export default function KlienciPage() {
         }
       }
 
+      // Karnety <= 150 zł NIE kwalifikują się do ciągłości
       if (kwotaTransakcji > 0 && kwotaTransakcji <= 150) return false;
-      if (opis.includes('1 wejście') || opis.includes('1 wejscie') || opis.includes('pojedyncz')) return false;
 
       return true;
     });
 
     let count = transakcjeKarnetow.length;
 
-    // Dodatkowy fallback: Jeśli w transakcjach nic jeszcze nie ma, ale klient ma w tablicy aktywny karnet > 150 zł
+    // Fallback: jeśli w transakcjach nic jeszcze nie ma, ale klient ma w tablicy aktywny kwalifikowany karnet standardowy > 150 zł (i nie jest to umowa ani medicover)
     if (count === 0 && Array.isArray(client.karnetyKlubowicza) && client.karnetyKlubowicza.length > 0) {
       const activeEligible = client.karnetyKlubowicza.some((k: any) => {
         if (isContractPassCheck(k)) return false;
+        const nazwaK = String(k.nazwa || '').toLowerCase();
+        if (nazwaK.includes('medicover') || nazwaK.includes('1 wejście') || nazwaK.includes('pojedyncz')) return false;
         const pCena = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
         return pCena > 150;
       });
@@ -745,29 +770,43 @@ export default function KlienciPage() {
 
   const calculateSystemDiscount = (client: any) => {
     if (!client) return 0;
-    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') return 0;
 
-    const manualVal = (client.rabat !== undefined && client.rabat !== null && client.rabat !== '')
-      ? parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''))
-      : null;
+    // Nadrzędność rabatu stałego: jeśli jest stały, ciągłość = 0%
+    const stalyRabat = parseFloat(String(client.discount || '0').replace(/[^0-9.]/g, '')) || 0;
+    if (stalyRabat > 0) return 0;
+
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') {
+      return 0;
+    }
+
+    // Ręczne nadpisanie rabatu za ciągłość (np. ołówkiem w panelu)
+    if (client.rabat !== undefined && client.rabat !== null && client.rabat !== '') {
+      const val = parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''));
+      if (!isNaN(val) && val > 0) return val;
+    }
 
     const std = calculateStandardSystemDiscount(client);
     const offset = parseFloat(client.systemDiscountOffset || client.system_discount_offset || '0') || 0;
-    const computed = Math.max(0, Math.min(25, std + offset));
-
-    if (manualVal !== null && !isNaN(manualVal) && manualVal > 0) {
-      return manualVal;
-    }
-
-    return computed;
+    return Math.max(0, Math.min(25, std + offset));
   };
 
-  const getEffectiveDiscount = (client: any, isContract: boolean = false, basePriceToCheck?: number) => {
+  const getEffectiveDiscount = (client: any, isContract: boolean = false, basePriceToCheck?: number, passNameToCheck?: string) => {
     if (!client) return 0;
-    if (basePriceToCheck !== undefined && basePriceToCheck <= 150) return 0;
-    const staly = parseFloat(client.discount || '0');
+
+    // 1. Rabat stały jest absolutnie nadrzędny
+    const staly = parseFloat(String(client.discount || '0').replace(/[^0-9.]/g, '')) || 0;
     if (staly > 0) return staly;
+
+    // 2. Umowy 12M nigdy nie mają rabatu za ciągłość
     if (isContract) return 0;
+
+    // 3. Karnety <= 150 zł nie mają rabatu za ciągłość
+    if (basePriceToCheck !== undefined && basePriceToCheck <= 150) return 0;
+
+    // 4. Karnety Medicover nie mają rabatu za ciągłość
+    const pName = String(passNameToCheck || '').toLowerCase();
+    if (pName.includes('medicover')) return 0;
+
     return calculateSystemDiscount(client);
   };
 
@@ -1331,7 +1370,7 @@ export default function KlienciPage() {
               const defKarnetu = ustrukturyzowaneKarnety.find(dk => dk.nazwa === primaryPass.nazwa);
               const basePrice = defKarnetu ? parseFloat(defKarnetu.cena) : (parseFloat(String(primaryPass.cena).replace(/[^0-9.-]/g, '')) || 0);
 
-              const currentDiscountPercent = getEffectiveDiscount(c, false, basePrice);
+              const currentDiscountPercent = getEffectiveDiscount(c, false, basePrice, primaryPass.nazwa);
               const priceAfterDiscount = basePrice * (1 - currentDiscountPercent / 100);
 
               const extendedExpiry = getCalendarExpiryDate(todayDateOnly, defKarnetu?.limitCzasowy || primaryPass.limitCzasowy || '1 miesiąc');
@@ -1423,7 +1462,8 @@ export default function KlienciPage() {
           .filter((t: any) => {
             const typ = String(t.typ_operacji || '').toLowerCase();
             const op = String(t.opis || '').toLowerCase();
-            return typ.includes('karnet') || typ.includes('umow') || typ.includes('oplata_raty') || typ.includes('pass_') || op.includes('karnet') || op.includes('umow') || op.includes('wejsc') || op.includes('wejść');
+            if (typ.includes('umow') || op.includes('umow') || typ.includes('rata') || op.includes('rata') || op.includes('medicover')) return false;
+            return typ.includes('karnet') || typ.includes('pass_') || op.includes('karnet') || op.includes('wejsc') || op.includes('wejść');
           })
           .map((t: any) => new Date(t.created_at).getTime())
           .sort((a: number, b: number) => b - a)[0] || 0;
@@ -1619,6 +1659,7 @@ export default function KlienciPage() {
     const fakeClient = {...profileClient};
     fakeClient.hasLostContinuity = false;
     fakeClient.has_lost_continuity = false;
+    fakeClient.discount = '';
     const std = calculateStandardSystemDiscount(fakeClient);
     
     const newOffset = targetVal - std;
@@ -2028,6 +2069,7 @@ export default function KlienciPage() {
       const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
       const isContract = isContractPassCheck(extendPassTarget, defKarnetu);
       const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
+      const isMedicover = (extendSelectedNewPassName || '').toLowerCase().includes('medicover');
 
       let bazowaCena = 0;
       if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
@@ -2036,9 +2078,9 @@ export default function KlienciPage() {
         bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, '')) || 0;
       }
 
-      const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
+      const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena, extendSelectedNewPassName);
       
-      const cenaPoRabacie = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
+      const cenaPoRabacie = (isContract || bazowaCena <= 150 || isMedicover) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
       const nowaCena = `${cenaPoRabacie.toFixed(2)} PLN`;
       const kwotaKarnetu = cenaPoRabacie;
 
@@ -2067,7 +2109,7 @@ export default function KlienciPage() {
       }
 
       let znizkaTekst = '';
-      if (activeDiscount > 0 && !isContract && bazowaCena > 150) {
+      if (activeDiscount > 0 && !isContract && bazowaCena > 150 && !isMedicover) {
         znizkaTekst = `(-${activeDiscount}%)`;
       }
 
@@ -2205,6 +2247,7 @@ export default function KlienciPage() {
       const defKarnetu = dostepneKarnety.find(k => k.nazwa === selectedPassToAdd);
       const isContract = isContractPassCheck(null, defKarnetu);
       const isTimeBased = defKarnetu?.typ_karnetu === 'Na czas';
+      const isMedicover = (selectedPassToAdd || '').toLowerCase().includes('medicover');
       
       let dataWygasnieciaStr = '';
       if (isContract) {
@@ -2220,12 +2263,12 @@ export default function KlienciPage() {
         bazowaCena = parseFloat(defKarnetu.cena) || 0;
       }
 
-      const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena);
-      const kwotaKarnetu = (isContract || bazowaCena <= 150) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
+      const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena, selectedPassToAdd);
+      const kwotaKarnetu = (isContract || bazowaCena <= 150 || isMedicover) ? bazowaCena : bazowaCena * (1 - activeDiscount / 100);
       const cenaObjKarnetu = `${kwotaKarnetu.toFixed(2)} PLN`;
 
       let znizkaTekst = '';
-      if (activeDiscount > 0 && !isContract && bazowaCena > 150) {
+      if (activeDiscount > 0 && !isContract && bazowaCena > 150 && !isMedicover) {
         znizkaTekst = `(-${activeDiscount}%)`;
       }
 
@@ -2650,12 +2693,13 @@ export default function KlienciPage() {
       const bazowyKarnet = dostepneKarnety.find(k => k.nazwa === editingPassModal.nazwa);
       const isContract = isContractPassCheck(editingPassModal, bazowyKarnet);
       const isTimeBased = bazowyKarnet?.typ_karnetu === 'Na czas';
+      const isMedicover = (editingPassModal.nazwa || '').toLowerCase().includes('medicover');
       const nowaCenaWartosc = parseFloat(String(editingPassModal.cena).replace(/[^0-9.]/g, '')) || 0;
-      const activeRabat = getEffectiveDiscount(profileClient, isContract, nowaCenaWartosc);
+      const activeRabat = getEffectiveDiscount(profileClient, isContract, nowaCenaWartosc, editingPassModal.nazwa);
       const cenaRegularna = bazowyKarnet ? (parseFloat(bazowyKarnet.cena) * (1 - activeRabat / 100)) : null;
 
       let znizkaTekst = profileClient.discount ? `(-${profileClient.discount}%)` : '';
-      if (!isContract && !profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna && nowaCenaWartosc > 150) {
+      if (!isContract && !isMedicover && !profileClient.discount && cenaRegularna && cenaRegularna > 0 && nowaCenaWartosc < cenaRegularna && nowaCenaWartosc > 150) {
         const roznica = cenaRegularna - nowaCenaWartosc;
         const procent = Math.round((roznica / cenaRegularna) * 100);
         znizkaTekst = `(-${procent}%)`;
@@ -3554,7 +3598,7 @@ export default function KlienciPage() {
                     </div>
 
                     {/* RABAT SYSTEMOWY (CIĄGŁOŚĆ) */}
-                    <div className="flex items-center gap-2 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200" title="Rabat za ciągłość zakupów (> 150 zł)">
+                    <div className="flex items-center gap-2 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200" title="Rabat za ciągłość zakupów (> 150 zł, bez umów i Medicover)">
                        <span className="text-[10px] font-bold text-sky-800 uppercase whitespace-nowrap">Rabat za ciągłość:</span>
                        {isEditingSystemDiscount ? (
                          <div className="flex items-center gap-1">
@@ -4571,9 +4615,10 @@ export default function KlienciPage() {
                           const baseCena = parseFloat(k.cena) || 0;
                           let finalCena = baseCena;
                           let hasDiscount = false;
-                          const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena);
+                          const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena, k.nazwa);
                           
-                          if (activeDiscount > 0 && !isContract && baseCena > 150) {
+                          const isMedicover = (k.nazwa || '').toLowerCase().includes('medicover');
+                          if (activeDiscount > 0 && !isContract && baseCena > 150 && !isMedicover) {
                             finalCena = baseCena * (1 - activeDiscount / 100);
                             hasDiscount = true;
                           }
@@ -4590,6 +4635,7 @@ export default function KlienciPage() {
                         {(() => {
                           const defKarnetu = dostepneKarnety.find(k => k.nazwa === extendSelectedNewPassName);
                           const isContract = isContractPassCheck(extendPassTarget, defKarnetu);
+                          const isMedicover = (extendSelectedNewPassName || '').toLowerCase().includes('medicover');
                           let baseCena = 0;
                           if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
                             baseCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
@@ -4598,8 +4644,8 @@ export default function KlienciPage() {
                           }
                           let finalCena = baseCena;
                           let hasDiscount = false;
-                          const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena);
-                          if (activeDiscount > 0 && !isContract && baseCena > 150) {
+                          const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena, extendSelectedNewPassName);
+                          if (activeDiscount > 0 && !isContract && baseCena > 150 && !isMedicover) {
                             finalCena = baseCena * (1 - activeDiscount / 100);
                             hasDiscount = true;
                           }
@@ -4878,9 +4924,10 @@ export default function KlienciPage() {
                     const baseCena = parseFloat(k.cena) || 0;
                     let finalCena = baseCena;
                     let hasDiscount = false;
-                    const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena);
+                    const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena, k.nazwa);
                     
-                    if (activeDiscount > 0 && !isContract && baseCena > 150) {
+                    const isMedicover = (k.nazwa || '').toLowerCase().includes('medicover');
+                    if (activeDiscount > 0 && !isContract && baseCena > 150 && !isMedicover) {
                       finalCena = baseCena * (1 - activeDiscount / 100);
                       hasDiscount = true;
                     }
@@ -4974,8 +5021,9 @@ export default function KlienciPage() {
                     const def = dostepneKarnety.find(k => k.nazwa === wybranyNazwa);
                     const isContract = isContractPassCheck(null, def);
                     const baseCena = def ? parseFloat(def.cena) : 0;
-                    const actRab = getEffectiveDiscount(profileClient, isContract, baseCena);
-                    const finalCena = (actRab > 0 && !isContract && baseCena > 150) ? baseCena * (1 - actRab / 100) : baseCena;
+                    const actRab = getEffectiveDiscount(profileClient, isContract, baseCena, wybranyNazwa);
+                    const isMedicover = (wybranyNazwa || '').toLowerCase().includes('medicover');
+                    const finalCena = (actRab > 0 && !isContract && baseCena > 150 && !isMedicover) ? baseCena * (1 - actRab / 100) : baseCena;
                     
                     setEditingPassModal({
                       ...editingPassModal, 
@@ -4994,8 +5042,9 @@ export default function KlienciPage() {
                     const baseCena = parseFloat(k.cena) || 0;
                     let finalCena = baseCena;
                     let hasDiscount = false;
-                    const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena);
-                    if (activeDiscount > 0 && !isContract && baseCena > 150) {
+                    const activeDiscount = getEffectiveDiscount(profileClient, isContract, baseCena, k.nazwa);
+                    const isMedicover = (k.nazwa || '').toLowerCase().includes('medicover');
+                    if (activeDiscount > 0 && !isContract && baseCena > 150 && !isMedicover) {
                       finalCena = baseCena * (1 - activeDiscount / 100);
                       hasDiscount = true;
                     }
