@@ -108,6 +108,22 @@ const parseDateFromClassKey = (classKey: string): Date => {
   return new Date();
 };
 
+// HELPER: POBIERANIE DATY ROZPOCZĘCIA WAŻNOŚCI KARNETU (waznyOd lub z opisu statusTekst)
+const getPassStartDate = (k: any): string | null => {
+  if (!k) return null;
+  const directStart = k.waznyOd || k.wazny_od || k.validFrom || k.startDate;
+  if (directStart && typeof directStart === 'string' && directStart.trim().length >= 10) {
+    return directStart.trim().substring(0, 10);
+  }
+  if (k.statusTekst && typeof k.statusTekst === 'string') {
+    const match = k.statusTekst.match(/wa[żz]ny\s+od:\s*(\d{4}-\d{2}-\d{2})/i);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+  return null;
+};
+
 // HELPER: CZY KARNET JEST W TEJ CHWILI AKTYWNIE ZAWIESZONY (DATA DZISIEJSZA MIEŚCI SIĘ W OKRESIE ZAWIESZENIA)
 const isPassCurrentlySuspended = (k: any, checkDateStr?: string) => {
   if (!k || !k.zawieszonyOd) return false;
@@ -478,7 +494,6 @@ export default function DashboardPage() {
         const pClientId = Number(promotedUser.klient_id || promotedUser.id);
         const pZapisId = promotedUser.zapis_id;
 
-        // Aktualizacja bezpośrednio po ID wiersza oraz jako fallback po klient_id + class_key
         if (pZapisId) {
           await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).eq('id', pZapisId);
         }
@@ -487,7 +502,6 @@ export default function DashboardPage() {
         }
         await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).in('class_key', allVariantKeys).eq('klient_id', pClientId);
         
-        // Natychmiastowa synchronizacja stanu pamięci podręcznej
         setZapisyNaZajecia(prev => {
           const updated = { ...prev };
           allVariantKeys.forEach(vk => {
@@ -1208,9 +1222,6 @@ export default function DashboardPage() {
     days: any[],
     currentRole: string = 'klubowicz'
   ) => {
-    // KROK KRYTYCZNY: Automatyczne odwoływanie w tle może wykonywać WYŁĄCZNIE administrator!
-    // Nigdy nie pozwalamy, aby sesja klubowicza lub trenera odwoływała treningi w tle,
-    // ponieważ zapytania klubowicza z powodu Row Level Security (RLS) w Supabase widzą tylko ograniczone rekordy.
     if (currentRole !== 'admin') return false;
 
     const now = new Date();
@@ -1236,7 +1247,6 @@ export default function DashboardPage() {
       const allClasses = [...stdDnia, ...jednorazDnia];
 
       for (const cls of allClasses) {
-        // ZABEZPIECZENIE: Ręcznie odwołane lub ręcznie przywrócone zajęcia
         if (cls.isOdwołane || cls.isUsunięte || cls.prevent_auto_cancel || cls.manual_restore) continue;
 
         const trainingName = (cls.title || '').trim();
@@ -1263,13 +1273,10 @@ export default function DashboardPage() {
           const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
           const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-          // POPRAWKA: Jeśli minął termin na zebranie minimalnej liczby osób (diffMinutes <= deadlineMins),
-          // zajęcia zostają trwale odwołane i zapisane w bazie, również jeśli trening już się zbliża lub rozpoczął
           if (diffMinutes <= deadlineMins) {
             const classSignupsFromMap = signupsMap[cls.classKey] || [];
             const activeSignupsFromMap = classSignupsFromMap.filter((s: any) => s.status === 'zapisany');
 
-            // Jeśli na liście jest wystarczająca liczba osób (np. 5 przy min 3), nigdy nie odwołujemy!
             if (activeSignupsFromMap.length >= minRequired) {
               continue;
             }
@@ -1289,7 +1296,6 @@ export default function DashboardPage() {
             if (activeSignups.length < minRequired) {
               hasChanges = true;
               
-              // TRWAŁE ODWOŁANIE W BAZIE (bezawaryjne delete + insert zamiast upsert onConflict)
               await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
               const rowsToInsert = allVariantKeys.map(vKey => ({
                 class_key: vKey,
@@ -1371,7 +1377,6 @@ export default function DashboardPage() {
     displayDate: string,
     currentRemainingSignups: any[]
   ) => {
-    // ZABEZPIECZENIE: Jeśli zajęcia były ręcznie przywrócone, nie odwołuj ich ponownie
     if (!classItem || classItem.isOdwołane || classItem.isUsunięte || classItem.prevent_auto_cancel || classItem.manual_restore) return false;
     
     const trainingName = (classItem.title || '').trim();
@@ -1392,8 +1397,6 @@ export default function DashboardPage() {
     }
 
     if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
-      // OCHRONA PEŁNEJ GRUPY: Jeśli po wypisaniu pozostało co najmniej minRequired osób (np. 5 przy min 3),
-      // pod żadnym pozorem nie odwołujemy zajęć!
       const activeSignupsRemaining = (currentRemainingSignups || []).filter((s: any) => s.status === 'zapisany');
       if (activeSignupsRemaining.length >= minRequired) {
         return false;
@@ -1413,12 +1416,10 @@ export default function DashboardPage() {
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-      // POPRAWKA: Odwołanie natychmiastowe po wypisaniu uczestnika, gdy czas do zajęć minął deadline
       if (diffMinutes <= deadlineMins) {
         const classKey = `${classItem.id}_${displayDate}`;
         const allVariantKeys = getKeysVariants(classItem.id, displayDate);
 
-        // TRWAŁE ODWOŁANIE W BAZIE (delete + insert zamiast upsert onConflict)
         await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
         const rowsToInsert = allVariantKeys.map(vKey => ({
           class_key: vKey,
@@ -1491,11 +1492,11 @@ export default function DashboardPage() {
     }
     return false;
   };
+
   const checkClassAutoCancellation = (classItem: any, displayDate: string, signups: any[]) => {
     if (!classItem || classItem.isUsunięte) return { isAutoCancelled: false, reason: '' };
     if (classItem.isOdwołane) return { isAutoCancelled: true, reason: 'ODWOŁANE PRZEZ KLUB' };
     
-    // Ochrona ręcznie przywróconych zajęć
     if (classItem.prevent_auto_cancel || classItem.manual_restore) {
       return { isAutoCancelled: false, reason: '' };
     }
@@ -1508,7 +1509,6 @@ export default function DashboardPage() {
         minRequired = bookingRules.min_participants_per_class[foundKey];
       }
     }
-
     let deadlineMins = bookingRules.auto_cancel_deadline_minutes;
     if (bookingRules.auto_cancel_deadline_per_class) {
       const foundKey = Object.keys(bookingRules.auto_cancel_deadline_per_class).find(k => areClassNamesMatching(k, trainingName));
@@ -1532,7 +1532,6 @@ export default function DashboardPage() {
       const now = new Date();
       const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
 
-      // Usunięto ograniczenie diffMinutes > 0: jeśli minął termin auto-odwołania, zajęcia pozostają trwale odwołane
       if (diffMinutes <= deadlineMins) {
         const activeCount = Array.isArray(signups) ? signups.filter(s => s.status === 'zapisany').length : 0;
         if (activeCount < minRequired) {
@@ -1617,6 +1616,33 @@ export default function DashboardPage() {
     const typ = (k.typKarnetu || k.typ_karnetu || '').toLowerCase();
     if (typ === 'na ilość treningów' || typ.includes('ilość') || typ.includes('trening')) return true;
     return k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined;
+  };
+
+  // HELPER: WERYFIKACJA CZY KARNET OBOWIĄZUJE W KONKRETNYM DNIU ZAJĘĆ (waznyOd <= dataZajec <= waznyDo + brak zawieszenia + dostępne wejścia)
+  const isPassValidForClassDate = (k: any, targetClassDateStr: string, todayDateStr: string): boolean => {
+    if (!k) return false;
+
+    const passStart = getPassStartDate(k);
+    if (passStart && targetClassDateStr && targetClassDateStr < passStart) {
+      return false;
+    }
+
+    if (!isContractPass(k)) {
+      if (k.waznyDo && k.waznyDo < todayDateStr) return false;
+      if (k.waznyDo && targetClassDateStr && k.waznyDo < targetClassDateStr) return false;
+    }
+
+    if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
+      if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
+    }
+
+    if (k.zawieszonyOd && targetClassDateStr) {
+      const sOd = k.zawieszonyOd;
+      const sDo = k.zawieszonyDo || '9999-12-31';
+      if (targetClassDateStr >= sOd && targetClassDateStr <= sDo) return false;
+    }
+
+    return true;
   };
 
   // NALICZANIE CIĄGŁOŚCI: WYKLUCZAMY KARNETY <= 150 ZŁ
@@ -1754,6 +1780,7 @@ export default function DashboardPage() {
     } catch (e) {}
     return "60 min";
   };
+
   const nextMonth = () => {
     if (!calendarViewDate) return;
     setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1));
@@ -1986,6 +2013,11 @@ export default function DashboardPage() {
             const isTime = isTimePass(k) || (pasujacyDef && isTimePass(pasujacyDef));
             const isQuantity = isQuantityPass(k) || (pasujacyDef && isQuantityPass(pasujacyDef));
 
+            const extractedStart = getPassStartDate(k);
+            if (extractedStart && !k.waznyOd) {
+              k.waznyOd = extractedStart;
+            }
+
             if (isContract) {
               k.isContract12M = true;
               k.pozostaloWejsc = null;
@@ -2047,7 +2079,8 @@ export default function DashboardPage() {
             }
 
             // Automatyczna aktualizacja etykiety karnetu oczekującego po wejściu w okres ważności
-            if (k.statusTekst?.includes('Oczekujący') && k.waznyOd && k.waznyOd <= todayDateOnly) {
+            const effectiveStart = getPassStartDate(k);
+            if (k.statusTekst?.includes('Oczekujący') && effectiveStart && effectiveStart <= todayDateOnly) {
               k.statusTekst = `Ważny do: ${k.waznyDo}`;
               karnetyZmienione = true;
             }
@@ -2090,7 +2123,7 @@ export default function DashboardPage() {
                   if (!k.waznyDo || k.waznyDo < tomorrowStr) {
                     k.waznyDo = tomorrowStr;
                   }
-                  k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} - bufor ciągłości)`;
+                  k.statusTekst = `Wykorzystano wejścia (wygasa ${tomorrowStr} bufor ciągłości)`;
                 }
               }
             }
@@ -2437,7 +2470,6 @@ export default function DashboardPage() {
           if (!groupedZapisy[z.class_key]) groupedZapisy[z.class_key] = [];
           groupedZapisy[z.class_key].push(entry);
 
-          // Poprawne generowanie wariantów kluczy dla jednorazowych i standardowych
           if (z.class_key && z.class_key.includes('_')) {
             const lastUnderscore = z.class_key.lastIndexOf('_');
             const classId = z.class_key.substring(0, lastUnderscore);
@@ -2487,7 +2519,6 @@ export default function DashboardPage() {
         activeDashboardDays
       );
 
-      // KROK KRYTYCZNY: Automatyczne sprawdzanie minimum osób uruchamia wyłącznie sesja administratora
       await processAutoCancellations(
         mappedSzablony,
         mappedJednorazowe,
@@ -2498,7 +2529,6 @@ export default function DashboardPage() {
         determinedRole
       );
 
-      // CYKLICZNE SPRAWDZENIE I WYSYŁKA POWIADOMIEŃ DO TRENERÓW (ŚCIŚLE 1X PRZED I 1X PO OSTATNIM TRENINGU DNIA)
       await checkAndSendTrainerReminders(
         mappedSzablony,
         mappedJednorazowe,
@@ -2725,7 +2755,6 @@ export default function DashboardPage() {
     const classKey = `${editClassModalData.id}_${editClassModalData.displayDate}`;
     const allVariantKeys = getKeysVariants(editClassModalData.id, editClassModalData.displayDate);
 
-    // TRWAŁY ZAPIS EDYCJI ZAJĘĆ (delete + insert zamiast zawodnego upsert onConflict)
     await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
     const rowsToInsert = allVariantKeys.map(vKey => ({
       class_key: vKey,
@@ -2802,7 +2831,6 @@ export default function DashboardPage() {
     const zapisani = dbSignups || [];
     const participantIds: number[] = Array.from(new Set(zapisani.map((s: any) => Number(s.klient_id)).filter(Boolean)));
 
-    // Usuwamy stare nadpisania dla wszystkich wariantów klucza
     await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
 
     if (nextOdwołaneState) {
@@ -2859,7 +2887,6 @@ export default function DashboardPage() {
 
       await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
 
-      // TRWAŁE ZAPISANIE ODWOŁANIA W BAZIE (insert zamiast upsert onConflict)
       const rowsToInsert = allVariantKeys.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
@@ -2871,7 +2898,6 @@ export default function DashboardPage() {
       }));
       await supabase.from('nadpisania_zajec').insert(rowsToInsert);
     } else {
-      // PRZYWRÓCENIE ZAJĘĆ (trwały insert z is_odwolane: false)
       const rowsToInsert = allVariantKeys.map(vKey => ({
         class_key: vKey,
         start: item.start || '08:00',
@@ -2968,7 +2994,6 @@ export default function DashboardPage() {
       await supabase.from('nadpisania_zajec').delete().in('class_key', keysToDelete);
 
       if (nextUsunięteState) {
-        // TRWAŁY ZAPIS USUNIĘCIA (insert zamiast upsert onConflict)
         const rowsToInsert = keysToDelete.map(vKey => ({
           class_key: vKey,
           start: item.start || '08:00',
@@ -2999,10 +3024,10 @@ export default function DashboardPage() {
       class_key: classKey,
       opis: nextUsunięteState ? `Usunięto zajęcia: "${item.title}" (${displayDate} ${item.start})` : `Przywrócono usunięte zajęcia: "${item.title}" (${displayDate} ${item.start})`
     }]);
-
     await loadData();
     showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały pomyślnie przywrócone!");
   };
+
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
     const safePayload = { ...payload };
     if (safePayload.karnetyKlubowicza !== undefined) {
@@ -3291,8 +3316,8 @@ export default function DashboardPage() {
         id: Date.now(), 
         nazwa: selectedBuyPass, 
         waznyDo: nowaDataWygasnieciaStr, 
-        pozostaloWejsc: null,
-        poczatkoweWejsc: null,
+        pozostaloWejsc: null, 
+        poczatkoweWejsc: null, 
         cena: cenaStr, 
         zaznaczoneZajecia: allowedClasses,
         dostepDo: dostepDo,
@@ -3302,7 +3327,7 @@ export default function DashboardPage() {
         isContract12M: true,
         contractSuspensionDaysLeft: 30,
         blokadaDo: null, 
-        powodBlokady: null,
+        powodBlokady: null, 
         zawieszonyOd: null, 
         zawieszonyDo: null, 
         historiaZawieszen: []
@@ -3322,22 +3347,22 @@ export default function DashboardPage() {
       nowaDataWygasnieciaStr = dataWygasniecia.toISOString().split('T')[0];
 
       const nowyKarnetObj = {
-        id: Date.now(),
-        nazwa: selectedBuyPass,
-        waznyDo: nowaDataWygasnieciaStr,
-        pozostaloWejsc: totalPool,
-        poczatkoweWejsc: parsedLimitWejsc,
+        id: Date.now(), 
+        nazwa: selectedBuyPass, 
+        waznyDo: nowaDataWygasnieciaStr, 
+        pozostaloWejsc: totalPool, 
+        poczatkoweWejsc: parsedLimitWejsc, 
         transferredEntries: leftover,
-        cena: cenaStr,
+        cena: cenaStr, 
         zaznaczoneZajecia: allowedClasses,
         dostepDo: dostepDo,
-        znizkaProcentowa: (basePriceNum <= 150) ? '' : effectiveDiscount.label,
-        rata: '1 / 1',
-        statusTekst: (basePriceNum <= 150 && totalPool <= 0) ? 'Wykorzystano wejście' : `Ważny do: ${nowaDataWygasnieciaStr}`,
-        blokadaDo: null,
-        powodBlokady: null,
-        zawieszonyOd: null,
-        zawieszonyDo: null,
+        znizkaProcentowa: (basePriceNum <= 150) ? '' : effectiveDiscount.label, 
+        rata: '1 / 1', 
+        statusTekst: (basePriceNum <= 150 && totalPool <= 0) ? 'Wykorzystano wejście' : `Ważny do: ${nowaDataWygasnieciaStr}`, 
+        blokadaDo: null, 
+        powodBlokady: null, 
+        zawieszonyOd: null, 
+        zawieszonyDo: null, 
         historiaZawieszen: []
       };
       updatedKarnety = [...karnetyList, nowyKarnetObj];
@@ -3351,17 +3376,17 @@ export default function DashboardPage() {
           }
           baseDate.setDate(baseDate.getDate() + dniWażności);
           nowaDataWygasnieciaStr = baseDate.toISOString().split('T')[0];
-          return {
+          return { 
             ...k, 
             nazwa: selectedBuyPass, 
             waznyDo: nowaDataWygasnieciaStr, 
-            pozostaloWejsc: null,
-            poczatkoweWejsc: null,
+            pozostaloWejsc: null, 
+            poczatkoweWejsc: null, 
             cena: cenaStr, 
             zaznaczoneZajecia: allowedClasses,
             dostepDo: dostepDo,
-            znizkaProcentowa: (basePriceNum <= 150) ? '' : effectiveDiscount.label,
-            statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`
+            znizkaProcentowa: (basePriceNum <= 150) ? '' : effectiveDiscount.label, 
+            statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}` 
           };
         }
         return k;
@@ -3374,8 +3399,8 @@ export default function DashboardPage() {
         id: Date.now(), 
         nazwa: selectedBuyPass, 
         waznyDo: nowaDataWygasnieciaStr, 
-        pozostaloWejsc: null,
-        poczatkoweWejsc: null,
+        pozostaloWejsc: null, 
+        poczatkoweWejsc: null, 
         cena: cenaStr, 
         zaznaczoneZajecia: allowedClasses,
         dostepDo: dostepDo,
@@ -3383,7 +3408,7 @@ export default function DashboardPage() {
         rata: '1 / 1', 
         statusTekst: `Ważny do: ${nowaDataWygasnieciaStr}`, 
         blokadaDo: null, 
-        powodBlokady: null,
+        powodBlokady: null, 
         zawieszonyOd: null, 
         zawieszonyDo: null, 
         historiaZawieszen: []
@@ -4075,9 +4100,9 @@ export default function DashboardPage() {
       const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
       const [sh = '00', sm = '00'] = (selectedClass.start || '00:00').split(':');
       const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
-      const calcClassDateStr = `${classYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const calcClassDateStr = selectedClass.isoDate || `${classYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-      // 2. BEZWZGLĘDNA BLOKADA: KARNET MUSI BYĆ WAŻNY W DNIU TRENINGU (POZA UMOWĄ 12M)
+      // 2. BEZWZGLĘDNA BLOKADA: KARNET MUSI OBOWIĄZYWAĆ W DNIU TRENINGU (waznyOd <= dataZajec <= waznyDo)
       const karnetWygasaPrzedTreningiem = karnetyUzytkownika.some((k: any) => {
         if (!k || isContractPass(k)) return false;
         return k.waznyDo && k.waznyDo >= todayDateOnly && k.waznyDo < calcClassDateStr;
@@ -4085,6 +4110,8 @@ export default function DashboardPage() {
 
       const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
+        const passStart = getPassStartDate(k);
+        if (passStart && calcClassDateStr < passStart) return false; // BLOKADA: Karnet zaczyna obowiązywać dopiero po terminie tych zajęć
         if (isContractPass(k)) return true; // Umowa 12M wyłączona z blokady wygaśnięcia
         if (k.waznyDo && k.waznyDo < todayDateOnly) return false;
         if (k.waznyDo && k.waznyDo < calcClassDateStr) return false; // BLOKADA: Trening po wygaśnięciu karnetu
@@ -4095,7 +4122,14 @@ export default function DashboardPage() {
       });
 
       if (karnetyUzytkownika.length === 0 || !posiadaAktywnyKarnet) {
-        const reasonMsg = karnetWygasaPrzedTreningiem
+        const futurePass = karnetyUzytkownika.find((k: any) => {
+          const pStart = getPassStartDate(k);
+          return pStart && calcClassDateStr < pStart;
+        });
+
+        const reasonMsg = futurePass
+          ? `Twój karnet "${futurePass.nazwa}" zaczyna obowiązywać dopiero od ${getPassStartDate(futurePass)} (wybrane zajęcia: ${calcClassDateStr}).`
+          : karnetWygasaPrzedTreningiem
           ? `Twój karnet wygasa przed terminem tych zajęć (Trening: ${calcClassDateStr}). Przedłuż karnet, aby zarezerwować miejsce.`
           : "Twój karnet wygasł lub wyczerpałeś wejścia. Kup lub przedłuż karnet w zakładce Karnety.";
 
@@ -4103,7 +4137,7 @@ export default function DashboardPage() {
           action_type: 'BOOKING_BLOCKED',
           status: 'BLOCKED',
           reason: `${currentUser.firstName || 'Klubowicz'}: ${reasonMsg}`,
-          rule_applied: karnetWygasaPrzedTreningiem ? 'pass_expired_before_class' : 'no_active_pass',
+          rule_applied: futurePass ? 'pass_not_started_yet' : (karnetWygasaPrzedTreningiem ? 'pass_expired_before_class' : 'no_active_pass'),
           payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_date: calcClassDateStr }
         }]);
         showToast(`Nie możesz zapisać się na zajęcia! ${reasonMsg}`, 'error');
@@ -4112,6 +4146,8 @@ export default function DashboardPage() {
       
       const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
+        const passStart = getPassStartDate(k);
+        if (passStart && calcClassDateStr < passStart) return false; // Karnet oczekujący na przyszłą datę nie obowiązuje w tym dniu
         if (!isContractPass(k) && k.waznyDo && (k.waznyDo < todayDateOnly || k.waznyDo < calcClassDateStr)) return false;
         if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
           if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
@@ -4121,8 +4157,21 @@ export default function DashboardPage() {
 
       if (!passAllowsThisClass) {
         const isPersonal = normalizeText(selectedClass.title).includes('personaln');
+        const activePassesOnDate = karnetyUzytkownika.filter((k: any) => {
+          const pStart = getPassStartDate(k);
+          if (pStart && calcClassDateStr < pStart) return false;
+          if (!isContractPass(k) && k.waznyDo && (k.waznyDo < todayDateOnly || k.waznyDo < calcClassDateStr)) return false;
+          return true;
+        });
+        const futureOpenPass = karnetyUzytkownika.find((k: any) => {
+          const pStart = getPassStartDate(k);
+          return pStart && calcClassDateStr < pStart && checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
+        });
+
         const errorMsg = isPersonal
           ? `Na trening "${selectedClass.title}" obowiązują wyłącznie karnety na umowę 12M!`
+          : futureOpenPass && activePassesOnDate.length > 0
+          ? `W dniu ${calcClassDateStr} obowiązuje Twój karnet "${activePassesOnDate[0].nazwa}", który nie obejmuje zajęć "${selectedClass.title}". Karnet "${futureOpenPass.nazwa}" zacznie obowiązywać dopiero od ${getPassStartDate(futureOpenPass)}.`
           : `Twój karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}"! Wybierz odpowiedni karnet w zakładce Karnety.`;
 
         await supabase.from('booking_logs').insert([{
@@ -4130,7 +4179,7 @@ export default function DashboardPage() {
           status: 'BLOCKED',
           reason: `${currentUser.firstName || 'Klubowicz'}: ${errorMsg}`,
           rule_applied: isPersonal ? 'personal_training_contract_only' : 'pass_class_restriction',
-          payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_title: selectedClass.title }
+          payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_title: selectedClass.title, class_date: calcClassDateStr }
         }]);
         showToast(errorMsg, 'error');
         return;
@@ -4151,7 +4200,7 @@ export default function DashboardPage() {
       const isClientBlocked = clientBanDate && String(clientBanDate) >= dzisiajData;
       const isPassBlocked = (currentUser.karnetyKlubowicza || []).some((k: any) => k.blokadaDo && String(k.blokadaDo) >= dzisiajData);
       
-      if (isClientBlocked || isPassBlocked) {
+      if (isClientBlocked || isPassBlocked) { 
         const errReason = currentUser.powodBlokady || (isClientBlocked ? `Twoje konto posiada aktywną blokadę do ${clientBanDate}.` : 'Twój karnet posiada aktywną blokadę.');
         await supabase.from('booking_logs').insert([{
           action_type: 'BOOKING_BLOCKED',
@@ -4160,8 +4209,8 @@ export default function DashboardPage() {
           rule_applied: 'absence_ban',
           payload: { klient_id: currentUser.id, class_id: selectedClass.id }
         }]);
-        showToast(`Nie możesz się zapisać! ${errReason}`, 'error');
-        return;
+        showToast(`Nie możesz się zapisać! ${errReason}`, 'error'); 
+        return; 
       }
 
       const isPassSuspended = (currentUser.karnetyKlubowicza || []).some((k: any) => {
@@ -4192,6 +4241,14 @@ export default function DashboardPage() {
         return; 
       }
 
+      // Dopasowanie karnetu obowiązującego dokładnie w dniu zajęć (dla limitu okna zapisów i limitu dziennego)
+      const activePassForClassDate = karnetyUzytkownika.find((k: any) =>
+        isPassValidForClassDate(k, calcClassDateStr, todayDateOnly) &&
+        checkPassAllowsClass(k, selectedClass.title, dostepneKarnety)
+      ) || karnetyUzytkownika.find((k: any) =>
+        isPassValidForClassDate(k, calcClassDateStr, todayDateOnly)
+      ) || karnetyUzytkownika[0];
+
       const userFullName = `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim().toLowerCase();
       const userIndividualLimit = indywidualneLimity.find((l: any) => 
         (l.klubowicz_id && String(l.klubowicz_id) === String(currentUser.id)) ||
@@ -4205,8 +4262,8 @@ export default function DashboardPage() {
         bookingWindowDays = Number(userIndividualLimit.dni_w_przod);
         isIndividualRuleApplied = true;
       } else {
-        const passName = (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0)
-          ? currentUser.karnetyKlubowicza[0].nazwa
+        const passName = activePassForClassDate
+          ? activePassForClassDate.nazwa
           : (currentUser.pass || 'OPEN');
         bookingWindowDays = bookingRules.booking_window_per_pass?.[passName] ?? bookingRules.booking_window_days ?? 14;
       }
@@ -4293,9 +4350,8 @@ export default function DashboardPage() {
         ? bookingRules.max_daily_bookings
         : Infinity;
 
-      if (currentUser.karnetyKlubowicza && currentUser.karnetyKlubowicza.length > 0) {
-        const activePass = currentUser.karnetyKlubowicza[0];
-        const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
+      if (activePassForClassDate) {
+        const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePassForClassDate.nazwa);
         if (passDef) {
           let meta: any = {};
           try { meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : (passDef.inne_ustawienia || {}); } catch(e) {}
@@ -4382,7 +4438,18 @@ export default function DashboardPage() {
       });
 
       let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-      const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      let passIndex = updatedKarnety.findIndex((k: any) =>
+        isQuantityPass(k) &&
+        k.pozostaloWejsc !== null &&
+        k.pozostaloWejsc !== undefined &&
+        parseInt(k.pozostaloWejsc, 10) > 0 &&
+        isPassValidForClassDate(k, calcClassDateStr, todayDateOnly) &&
+        checkPassAllowsClass(k, selectedClass.title, dostepneKarnety)
+      );
+      if (passIndex === -1) {
+        passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) > 0);
+      }
+
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
@@ -4501,9 +4568,31 @@ export default function DashboardPage() {
         });
         return updated;
       });
+      const waitlistClassDateStr = selectedClass.isoDate || (() => {
+        let wd = 1, wm = 1;
+        if (selectedClass.displayDate?.includes('/')) {
+          [wd, wm] = selectedClass.displayDate.split('/').map(Number);
+        } else if (selectedClass.displayDate?.includes('-')) {
+          const wp = selectedClass.displayDate.split('-').map(Number);
+          wm = wp[1]; wd = wp[2];
+        }
+        const wy = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+        return `${wy}-${String(wm).padStart(2, '0')}-${String(wd).padStart(2, '0')}`;
+      })();
 
       let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
-      const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      let passIndex = updatedKarnety.findIndex((k: any) =>
+        isQuantityPass(k) &&
+        k.pozostaloWejsc !== null &&
+        k.pozostaloWejsc !== undefined &&
+        parseInt(k.pozostaloWejsc, 10) > 0 &&
+        isPassValidForClassDate(k, waitlistClassDateStr, todayDateOnly) &&
+        checkPassAllowsClass(k, selectedClass.title, dostepneKarnety)
+      );
+      if (passIndex === -1) {
+        passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) > 0);
+      }
+
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
@@ -4887,8 +4976,9 @@ export default function DashboardPage() {
         m = p[1];
         d = p[2];
       }
-      const classDateObj = new Date(new Date().getFullYear(), m - 1, d);
-      const calcClassDateStr = `${classDateObj.getFullYear()}-${String(classDateObj.getMonth() + 1).padStart(2, '0')}-${String(classDateObj.getDate()).padStart(2, '0')}`;
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      const classDateObj = new Date(classYear, m - 1, d);
+      const calcClassDateStr = selectedClass.isoDate || `${classDateObj.getFullYear()}-${String(classDateObj.getMonth() + 1).padStart(2, '0')}-${String(classDateObj.getDate()).padStart(2, '0')}`;
 
       const isPassSuspended = (klient.karnetyKlubowicza || []).some((k: any) => {
         if (k.zawieszonyOd) {
@@ -4904,31 +4994,39 @@ export default function DashboardPage() {
         return;
       }
 
-      // SPRAWDZENIE CZY KARNET NIE WYGASA PRZED ZAJĘCIAMI
-      const passExpiresBeforeClass = !isContractPass(klient.karnetyKlubowicza?.[0]) && (klient.karnetyKlubowicza || []).some((k: any) => k.waznyDo && k.waznyDo < calcClassDateStr);
-      if (passExpiresBeforeClass) {
-        if (!confirm(`UWAGA: Karnet klienta "${klient.firstName} ${klient.lastName}" wygasa przed terminem tych zajęć (Zajęcia: ${calcClassDateStr}). Czy na pewno chcesz zapisać go mimo to jako zarządca?`)) {
+      // SPRAWDZENIE CZY KLIENT MA KARNET OBOWIĄZUJĄCY W TYM DNIU (waznyOd <= calcClassDateStr <= waznyDo)
+      const hasAnyValidPassOnClassDate = (klient.karnetyKlubowicza || []).some((k: any) =>
+        isPassValidForClassDate(k, calcClassDateStr, dzisiajData)
+      );
+
+      if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0 && !hasAnyValidPassOnClassDate) {
+        const futurePass = klient.karnetyKlubowicza.find((k: any) => {
+          const pStart = getPassStartDate(k);
+          return pStart && calcClassDateStr < pStart;
+        });
+        const warnDateMsg = futurePass
+          ? `UWAGA: Karnet "${futurePass.nazwa}" klienta "${klient.firstName} ${klient.lastName}" zaczyna obowiązywać dopiero od ${getPassStartDate(futurePass)} (Zajęcia: ${calcClassDateStr}). Czy na pewno chcesz zapisać go mimo to jako zarządca?`
+          : `UWAGA: Karnet klienta "${klient.firstName} ${klient.lastName}" wygasa przed terminem tych zajęć (Zajęcia: ${calcClassDateStr}). Czy na pewno chcesz zapisać go mimo to jako zarządca?`;
+
+        if (!confirm(warnDateMsg)) {
           return;
         }
       }
 
       const passAllowsClass = (klient.karnetyKlubowicza || []).some((k: any) => {
-        if (!isContractPass(k) && k.waznyDo) {
-          const expDate = new Date(k.waznyDo);
-          expDate.setHours(23, 59, 59, 999);
-          if (expDate < new Date()) return false;
-        }
-        if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) <= 0) {
-          return false;
-        }
+        if (!isPassValidForClassDate(k, calcClassDateStr, dzisiajData)) return false;
         return checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
       });
 
-      if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0 && !passAllowsClass) {
+      if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0 && hasAnyValidPassOnClassDate && !passAllowsClass) {
         const isPersonal = normalizeText(selectedClass.title).includes('personaln');
+        const activeOnDateNames = klient.karnetyKlubowicza
+          .filter((k: any) => isPassValidForClassDate(k, calcClassDateStr, dzisiajData))
+          .map((k: any) => k.nazwa)
+          .join(', ') || klient.pass || '';
         const warnMsg = isPersonal
-          ? `UWAGA: Trening personalny "${selectedClass.title}" wymaga karnetu na umowę 12M. Klient posiada: "${klient.pass || ''}". Czy na pewno chcesz zapisać go mimo to jako zarządca?`
-          : `UWAGA: Karnet klienta "${klient.pass || ''}" nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`;
+          ? `UWAGA: Trening personalny "${selectedClass.title}" wymaga karnetu na umowę 12M. Klient posiada w tym dniu: "${activeOnDateNames}". Czy na pewno chcesz zapisać go mimo to jako zarządca?`
+          : `UWAGA: Aktywny w dniu ${calcClassDateStr} karnet klienta ("${activeOnDateNames}") nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`;
 
         if (!confirm(warnMsg)) {
           return;
@@ -4960,9 +5058,15 @@ export default function DashboardPage() {
         ? bookingRules.max_daily_bookings
         : Infinity;
 
-      if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0) {
-        const activePass = klient.karnetyKlubowicza[0];
-        const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePass.nazwa);
+      const activePassForClientOnDate = (klient.karnetyKlubowicza || []).find((k: any) =>
+        isPassValidForClassDate(k, calcClassDateStr, dzisiajData) &&
+        checkPassAllowsClass(k, selectedClass.title, dostepneKarnety)
+      ) || (klient.karnetyKlubowicza || []).find((k: any) =>
+        isPassValidForClassDate(k, calcClassDateStr, dzisiajData)
+      ) || klient.karnetyKlubowicza?.[0];
+
+      if (activePassForClientOnDate) {
+        const passDef = dostepneKarnety.find((k: any) => k.nazwa === activePassForClientOnDate.nazwa);
         if (passDef) {
           let meta: any = {};
           try { meta = typeof passDef.inne_ustawienia === 'string' ? JSON.parse(passDef.inne_ustawienia) : (passDef.inne_ustawienia || {}); } catch(e) {}
@@ -5007,7 +5111,18 @@ export default function DashboardPage() {
       }
 
       let updatedKarnety = [...(klient.karnetyKlubowicza || [])];
-      const passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined);
+      let passIndex = updatedKarnety.findIndex((k: any) =>
+        isQuantityPass(k) &&
+        k.pozostaloWejsc !== null &&
+        k.pozostaloWejsc !== undefined &&
+        parseInt(k.pozostaloWejsc, 10) > 0 &&
+        isPassValidForClassDate(k, calcClassDateStr, dzisiajData) &&
+        checkPassAllowsClass(k, selectedClass.title, dostepneKarnety)
+      );
+      if (passIndex === -1) {
+        passIndex = updatedKarnety.findIndex((k: any) => isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) > 0);
+      }
+
       if (passIndex !== -1) {
         const currentRemaining = parseInt(updatedKarnety[passIndex].pozostaloWejsc, 10);
         if (!isNaN(currentRemaining) && currentRemaining > 0) {
@@ -5427,6 +5542,7 @@ export default function DashboardPage() {
 
     return opisText.includes(q) || opTypeText.includes(q) || clientName.includes(q) || clientEmail.includes(q);
   });
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       {/* SYSTEM POWIADOMIEŃ TOAST */}
@@ -5998,7 +6114,6 @@ export default function DashboardPage() {
           </div>
         </section>
       )}
-
       {/* ZAKŁADKA 2: GRAFIK ZAJĘĆ */}
       {(appRole !== 'admin' || adminViewTab === 'grafik') && (
         <section className="space-y-4">
@@ -6136,7 +6251,11 @@ export default function DashboardPage() {
                         const isUserInMainGroup = mySignupEntry && mySignupEntry.status === 'zapisany';
                         const isUserInWaitlist = mySignupEntry && mySignupEntry.status === 'krzesełko';
 
-                        const isPassRestrictedForClass = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.length > 0 && !currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, item.title, dostepneKarnety));
+                        const hasValidPassOnColDate = appRole === 'klubowicz' && currentUser?.karnetyKlubowicza?.some((k: any) => isPassValidForClassDate(k, col.isoDate, todayStr));
+                        const isPassRestrictedForClass = Boolean(
+                          hasValidPassOnColDate &&
+                          !currentUser.karnetyKlubowicza.some((k: any) => isPassValidForClassDate(k, col.isoDate, todayStr) && checkPassAllowsClass(k, item.title, dostepneKarnety))
+                        );
 
                         const cancelDeadlineInfo = getCancelDeadlineInfo(item, col.date);
                         const isMenuOpen = activeMenuClassId === classKeyUnique;
@@ -6151,7 +6270,7 @@ export default function DashboardPage() {
                                 return;
                               }
                               if (isPassRestrictedForClass && !isUserInMainGroup && !isUserInWaitlist) {
-                                showToast(`Twój karnet nie upoważnia do zapisu na zajęcia "${item.title}".`, 'warning');
+                                showToast(`Twój karnet obowiązujący w tym dniu nie upoważnia do zapisu na zajęcia "${item.title}".`, 'warning');
                               }
                               setSelectedClass({
                                 ...item,
@@ -7081,6 +7200,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
+
               {/* Dolny pasek zapisu */}
               {['klubowicz', 'trener'].includes(appRole) && !canManageClass ? (
                 <div className="pt-2">
@@ -7095,7 +7215,6 @@ export default function DashboardPage() {
                         );
                       }
                       const hasActivePass = currentUser?.karnetyKlubowicza?.length > 0;
-                      const allowsThisClass = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) => checkPassAllowsClass(k, selectedClass.title, dostepneKarnety));
                       
                       const now = new Date();
                       const todayDateOnly = now.toISOString().split('T')[0];
@@ -7108,32 +7227,56 @@ export default function DashboardPage() {
                         return `${yr}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
                       })();
 
-                      const passExpiredBeforeClass = hasActivePass && !currentUser.karnetyKlubowicza.some((k: any) => {
-                        if (!k) return false;
-                        if (isContractPass(k)) return true;
-                        if (k.waznyDo && (k.waznyDo < todayDateOnly || k.waznyDo < calcClassDateStr)) return false;
-                        if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined && parseInt(k.pozostaloWejsc, 10) <= 0) return false;
-                        return true;
-                      });
+                      const hasValidPassOnClassDate = hasActivePass && currentUser.karnetyKlubowicza.some((k: any) =>
+                        isPassValidForClassDate(k, calcClassDateStr, todayDateOnly)
+                      );
 
-                      if (appRole === 'klubowicz' && hasActivePass && passExpiredBeforeClass) {
+                      const allowsThisClass = hasValidPassOnClassDate && currentUser.karnetyKlubowicza.some((k: any) =>
+                        isPassValidForClassDate(k, calcClassDateStr, todayDateOnly) &&
+                        checkPassAllowsClass(k, selectedClass.title, dostepneKarnety)
+                      );
+
+                      if (appRole === 'klubowicz' && hasActivePass && !hasValidPassOnClassDate) {
+                        const futurePass = currentUser.karnetyKlubowicza.find((k: any) => {
+                          const pStart = getPassStartDate(k);
+                          return pStart && calcClassDateStr < pStart;
+                        });
+
                         return (
                           <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
-                            <div>⚠️ Twój karnet wygasa przed terminem tych zajęć</div>
+                            <div>
+                              ⚠️ {futurePass
+                                ? `Twój karnet "${futurePass.nazwa}" zaczyna obowiązywać dopiero od ${getPassStartDate(futurePass)}`
+                                : 'Twój karnet wygasa przed terminem tych zajęć'}
+                            </div>
                             <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">
-                              Trening odbywa się {calcClassDateStr}, a Twój karnet wygasa wcześniej. Przedłuż karnet w zakładce Karnety, aby się zapisać.
+                              {futurePass
+                                ? `Trening odbywa się ${calcClassDateStr}. Zapis na te zajęcia będzie dostępny od dnia aktywacji karnetu.`
+                                : `Trening odbywa się ${calcClassDateStr}, a Twój karnet wygasa wcześniej. Przedłuż karnet w zakładce Karnety, aby się zapisać.`}
                             </div>
                           </div>
                         );
                       }
 
-                      if (appRole === 'klubowicz' && hasActivePass && !allowsThisClass) {
+                      if (appRole === 'klubowicz' && hasValidPassOnClassDate && !allowsThisClass) {
                         const isPersonal = normalizeText(selectedClass.title).includes('personaln');
+                        const activePassesOnDate = currentUser.karnetyKlubowicza.filter((k: any) =>
+                          isPassValidForClassDate(k, calcClassDateStr, todayDateOnly)
+                        );
+                        const futureOpenPass = currentUser.karnetyKlubowicza.find((k: any) => {
+                          const pStart = getPassStartDate(k);
+                          return pStart && calcClassDateStr < pStart && checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
+                        });
+
                         return (
                           <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
                             <div>⚠️ {isPersonal ? 'Na trening personalny obowiązuje wyłącznie umowa 12M' : 'Twój karnet nie upoważnia do zapisu na te zajęcia'}</div>
                             <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">
-                              {isPersonal ? 'Zapis możliwy tylko z aktywnym karnetem na umowę 12 miesięcy.' : 'Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.'}
+                              {isPersonal
+                                ? 'Zapis możliwy tylko z aktywnym karnetem na umowę 12 miesięcy.'
+                                : futureOpenPass && activePassesOnDate.length > 0
+                                ? `W dniu ${calcClassDateStr} obowiązuje Twój obecny karnet ("${activePassesOnDate[0].nazwa}"). Karnet "${futureOpenPass.nazwa}" zacznie obowiązywać od ${getPassStartDate(futureOpenPass)}.`
+                                : 'Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.'}
                             </div>
                           </div>
                         );
@@ -7496,6 +7639,7 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
       {/* MODAL: PROFIL KLUBOWICZA */}
       {profileClient && (
         <div className="fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-end backdrop-blur-sm animate-in fade-in">
@@ -7546,7 +7690,6 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
-
               {/* Karnety klubowicza */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
