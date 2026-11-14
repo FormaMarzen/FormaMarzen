@@ -5787,12 +5787,7 @@ export default function DashboardPage() {
       {(activeCountdownsSorted.length > 0 || ['klubowicz', 'trener'].includes(appRole)) && (
         <section className="bg-gradient-to-r from-slate-900 via-sky-950 to-slate-900 border border-sky-800/70 rounded-2xl px-4 py-3 shadow-sm text-white">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2">
-              <span className="text-sm">⏳</span>
-              <span className="text-[11px] font-black uppercase tracking-wider text-sky-200">
-                Odliczanie do wydarzeń
-              </span>
-            </div>
+    
 
             <div className="flex items-center gap-2">
               {['klubowicz', 'trener'].includes(appRole) && (
