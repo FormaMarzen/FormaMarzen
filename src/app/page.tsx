@@ -21,24 +21,32 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
-// POBIERANIE PEŁNE I OD NAJNOWSZYCH (BEZ LIMITU 1000 REKORDÓW SUPABASE)
+// POBIERANIE PEŁNE PAGINACJĄ (BEZ LIMITU 1000 REKORDÓW SUPABASE I BEZ UTRATY DANYCH)
 const fetchAllFromSupabase = async (
   table: string,
-  orderBy: string = 'created_at',
-  ascending: boolean = false,
-  maxPages: number = 50
+  orderBy: string = 'id',
+  ascending: boolean = true,
+  maxPages: number = 100,
+  selectColumns: string = '*',
+  filterFn?: (query: any) => any
 ) => {
   let result: any[] = [];
   for (let i = 0; i < maxPages; i++) {
-    const { data, error } = await supabase
+    let query = supabase
       .from(table)
-      .select('*')
+      .select(selectColumns)
       .order(orderBy, { ascending })
       .range(i * 1000, (i + 1) * 1000 - 1);
+
+    if (filterFn) {
+      query = filterFn(query);
+    }
+
+    const { data, error } = await query;
     
     if (error) {
       if (orderBy !== 'id' && error.message?.includes('does not exist')) {
-        return fetchAllFromSupabase(table, 'id', ascending, maxPages);
+        return fetchAllFromSupabase(table, 'id', ascending, maxPages, selectColumns, filterFn);
       }
       console.error(`Błąd pobierania tabeli ${table}:`, error);
       break;
@@ -1908,53 +1916,44 @@ export default function DashboardPage() {
       const nowInit = new Date();
       const todayIsoInit = `${nowInit.getFullYear()}-${String(nowInit.getMonth() + 1).padStart(2, '0')}-${String(nowInit.getDate()).padStart(2, '0')}`;
 
-      const twoWeeksAgo = new Date();
-      twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-      const twoWeeksAgoStr = `${twoWeeksAgo.getFullYear()}-${String(twoWeeksAgo.getMonth() + 1).padStart(2, '0')}-${String(twoWeeksAgo.getDate()).padStart(2, '0')}`;
-
-      const ninetyDaysAgo = new Date();
-      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-      const ninetyDaysAgoIso = ninetyDaysAgo.toISOString();
-
-      const oneYearForward = new Date();
-      oneYearForward.setDate(oneYearForward.getDate() + 365);
-      const oneYearForwardStr = `${oneYearForward.getFullYear()}-${String(oneYearForward.getMonth() + 1).padStart(2, '0')}-${String(oneYearForward.getDate()).padStart(2, '0')}`;
-
-      // ETAP 1: Sesja + słowniki + wydarzenia odliczające + zapisy (wszystko równolegle w jednym rzucie)
+      // RÓWNOLEGŁE POBIERANIE PEŁNYCH DANYCH BEZ UCINANIA ŻADNYCH REKORDÓW (zapisy_zajec, klienci, grafik, wydarzenia)
       const [
         rulesRes,
         sessionRes,
         trenerzyData,
         karnetyDefData,
-        klienciRes,
+        klienciData,
         ogloszeniaData,
         szablonyData,
-        rawJednorazoweRes,
+        rawJednorazoweData,
         nadpisaniaData,
-        zapisyRes,
+        zapisyData,
         rodzajeData,
-        rawWydarzeniaRes,
+        rawWydarzeniaData,
         limityKlubowiczowData,
         countdownRes
       ] = await Promise.all([
         supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
         supabase.auth.getSession(),
-        fetchAllFromSupabase('trenerzy', 'id', true, 5),
-        fetchAllFromSupabase('karnety', 'id', true, 5),
-        supabase.from('klienci').select('*').order('id', { ascending: true }).limit(2000),
-        fetchAllFromSupabase('ogloszenia', 'id', false, 5),
-        fetchAllFromSupabase('grafik_zajec', 'id', true, 5),
-        supabase.from('zajecia_jednorazowe').select('*').gte('full_date_str', twoWeeksAgoStr).lte('full_date_str', oneYearForwardStr).order('full_date_str', { ascending: true }),
-        fetchAllFromSupabase('nadpisania_zajec', 'id', false, 10),
-        supabase.from('zapisy_zajec').select('*').gte('created_at', ninetyDaysAgoIso).order('created_at', { ascending: false }).limit(5000),
-        fetchAllFromSupabase('rodzaje_zajec', 'id', true, 5),
-        supabase.from('wydarzenia_kilkudniowe').select('*').gte('date_to', twoWeeksAgoStr).lte('date_from', oneYearForwardStr).order('date_from', { ascending: true }),
-        fetchAllFromSupabase('indywidualne_limity_zapisow', 'created_at', false, 5),
+        fetchAllFromSupabase('trenerzy', 'id', true, 10),
+        fetchAllFromSupabase('karnety', 'id', true, 10),
+        fetchAllFromSupabase('klienci', 'id', true, 50),
+        fetchAllFromSupabase('ogloszenia', 'id', false, 10),
+        fetchAllFromSupabase('grafik_zajec', 'id', true, 10),
+        fetchAllFromSupabase('zajecia_jednorazowe', 'id', true, 50),
+        fetchAllFromSupabase('nadpisania_zajec', 'id', false, 20),
+        fetchAllFromSupabase(
+          'zapisy_zajec',
+          'id',
+          true,
+          100,
+          'id, class_key, klient_id, status, waitlist_cutoff_minutes, obecny, nieobecny, created_at'
+        ),
+        fetchAllFromSupabase('rodzaje_zajec', 'id', true, 10),
+        fetchAllFromSupabase('wydarzenia_kilkudniowe', 'date_from', true, 50),
+        fetchAllFromSupabase('indywidualne_limity_zapisow', 'created_at', false, 10),
         supabase.from('odliczanie_wydarzen').select('*').gte('data_wydarzenia', todayIsoInit).order('data_wydarzenia', { ascending: true }).order('created_at', { ascending: true })
       ]);
-
-      const klienciData = klienciRes.data || [];
-      const zapisyData = zapisyRes.data || [];
 
       if (limityKlubowiczowData) {
         setIndywidualneLimity(limityKlubowiczowData);
@@ -2002,17 +2001,18 @@ export default function DashboardPage() {
         }
       }
 
-      // OPTYMALIZACJA: Pobieramy transakcje tylko dla Administratora (z wybranego zakresu dat) lub tylko własne dla zalogowanego klienta
+      // POBIERANIE TRANSAKCJI: Dla Administratora pobieramy pełną historię z wybranego zakresu dat paginacją (bez limitu 1000 rekordów)
       let tData: any[] = [];
       if (determinedRole === 'admin') {
-        const rangeFrom = operationsDateRange.from || twoWeeksAgoStr;
-        const { data: adminTx } = await supabase
-          .from('transakcje')
-          .select('*')
-          .gte('created_at', `${rangeFrom}T00:00:00`)
-          .order('created_at', { ascending: false })
-          .limit(1000);
-        tData = adminTx || [];
+        const rangeFrom = operationsDateRange.from;
+        tData = await fetchAllFromSupabase(
+          'transakcje',
+          'created_at',
+          false,
+          100,
+          '*',
+          rangeFrom ? (q: any) => q.gte('created_at', `${rangeFrom}T00:00:00`) : undefined
+        );
         setWszystkieTransakcje(tData);
       } else {
         setWszystkieTransakcje([]);
@@ -2387,13 +2387,14 @@ export default function DashboardPage() {
         if (profileClient) {
           const currentActive = enriched.find((c: any) => c.id === profileClient.id);
           if (currentActive) {
-            // Dla admina dociągamy pełną historię transakcji konkretnego profilu przy jego podglądzie
-            const { data: profileTx } = await supabase
-              .from('transakcje')
-              .select('*')
-              .eq('klient_id', currentActive.id)
-              .order('created_at', { ascending: false })
-              .limit(200);
+            const profileTx = await fetchAllFromSupabase(
+              'transakcje',
+              'created_at',
+              false,
+              50,
+              '*',
+              (q: any) => q.eq('klient_id', currentActive.id)
+            );
             setProfileClient({ ...currentActive, transakcje: profileTx || currentActive.transakcje || [] });
           }
         }
@@ -2498,9 +2499,8 @@ export default function DashboardPage() {
       }
 
       let mappedJednorazowe: any[] = [];
-      const rawJednorazowe = rawJednorazoweRes.data;
-      if (rawJednorazowe && rawJednorazowe.length > 0) {
-        mappedJednorazowe = rawJednorazowe.map((j: any) => ({
+      if (rawJednorazoweData && rawJednorazoweData.length > 0) {
+        mappedJednorazowe = rawJednorazoweData.map((j: any) => ({
           ...j,
           rawDbId: j.id,
           id: `j_${j.id}`,
@@ -2515,25 +2515,6 @@ export default function DashboardPage() {
           isOdwołane: false,
           isUsunięte: false
         }));
-      } else {
-        const fallbackJednorazowe = await fetchAllFromSupabase('zajecia_jednorazowe', 'id', false, 5);
-        if (fallbackJednorazowe) {
-          mappedJednorazowe = fallbackJednorazowe.map((j: any) => ({
-            ...j,
-            rawDbId: j.id,
-            id: `j_${j.id}`,
-            title: j.title || j.nazwa,
-            start: j.start_time || j.start,
-            end: j.end_time || j.end,
-            limit: j.limit_miejsc || j.limit,
-            trainer: j.trainer || j.prowadzacy,
-            displayDate: j.display_date,
-            fullDateStr: j.full_date_str,
-            isJednorazowe: true,
-            isOdwołane: false,
-            isUsunięte: false
-          }));
-        }
       }
       setJednorazoweZajecia(mappedJednorazowe);
 
@@ -2671,24 +2652,15 @@ export default function DashboardPage() {
         setRodzajeZajec(parsedRodzaje);
       }
       
-      const rawWydarzenia = rawWydarzeniaRes.data;
-      if (rawWydarzenia && rawWydarzenia.length > 0) {
-        setWydarzeniaKilkudniowe(rawWydarzenia.map((w: any) => ({ 
+      if (rawWydarzeniaData && rawWydarzeniaData.length > 0) {
+        setWydarzeniaKilkudniowe(rawWydarzeniaData.map((w: any) => ({ 
           id: w.id, 
           title: w.title, 
           dateFrom: w.date_from, 
           dateTo: w.date_to 
         })));
       } else {
-        const fallbackWydarzenia = await fetchAllFromSupabase('wydarzenia_kilkudniowe', 'date_from', true, 5);
-        if (fallbackWydarzenia) {
-          setWydarzeniaKilkudniowe(fallbackWydarzenia.map((w: any) => ({ 
-            id: w.id, 
-            title: w.title, 
-            dateFrom: w.date_from, 
-            dateTo: w.date_to 
-          })));
-        }
+        setWydarzeniaKilkudniowe([]);
       }
 
     } catch (err) {
@@ -5758,6 +5730,8 @@ export default function DashboardPage() {
     ? activeCountdownsSorted
     : activeCountdownsSorted.slice(0, 2);
 
+  const hasCountdownHeaderButtons = ['klubowicz', 'trener'].includes(appRole) || activeCountdownsSorted.length > 2;
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       {/* SYSTEM POWIADOMIEŃ TOAST */}
@@ -5786,39 +5760,39 @@ export default function DashboardPage() {
       {/* SEKCJA: ZEGAR ODLICZAJĄCY DO WYDARZEŃ (KOMPAKTOWY PASEK NA GÓRZE - W NATURALNYM UKŁADZIE STRONY) */}
       {(activeCountdownsSorted.length > 0 || ['klubowicz', 'trener'].includes(appRole)) && (
         <section className="bg-gradient-to-r from-slate-900 via-sky-950 to-slate-900 border border-sky-800/70 rounded-2xl px-4 py-3 shadow-sm text-white">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-    
+          {hasCountdownHeaderButtons && (
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                {['klubowicz', 'trener'].includes(appRole) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCountdownTitleInput('');
+                      setCountdownDateInput(todayStr);
+                      setIsCountdownModalOpen(true);
+                    }}
+                    className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[10px] sm:text-[11px] px-3 py-1 rounded-xl uppercase tracking-wider transition-colors cursor-pointer shadow-xs flex items-center gap-1"
+                  >
+                    <span>+</span>
+                    <span>Dodaj wydarzenie</span>
+                  </button>
+                )}
 
-            <div className="flex items-center gap-2">
-              {['klubowicz', 'trener'].includes(appRole) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCountdownTitleInput('');
-                    setCountdownDateInput(todayStr);
-                    setIsCountdownModalOpen(true);
-                  }}
-                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[10px] sm:text-[11px] px-3 py-1 rounded-xl uppercase tracking-wider transition-colors cursor-pointer shadow-xs flex items-center gap-1"
-                >
-                  <span>+</span>
-                  <span>Dodaj wydarzenie</span>
-                </button>
-              )}
-
-              {activeCountdownsSorted.length > 2 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAllCountdowns(!showAllCountdowns)}
-                  className="bg-white/10 hover:bg-white/20 text-sky-100 border border-white/15 font-bold text-[10px] sm:text-[11px] px-2.5 py-1 rounded-xl uppercase tracking-wider transition-colors cursor-pointer"
-                >
-                  {showAllCountdowns ? 'Zwiń ⌃' : `Wszystkie (${activeCountdownsSorted.length}) ⌄`}
-                </button>
-              )}
+                {activeCountdownsSorted.length > 2 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllCountdowns(!showAllCountdowns)}
+                    className="bg-white/10 hover:bg-white/20 text-sky-100 border border-white/15 font-bold text-[10px] sm:text-[11px] px-2.5 py-1 rounded-xl uppercase tracking-wider transition-colors cursor-pointer"
+                  >
+                    {showAllCountdowns ? 'Zwiń ⌃' : `Wszystkie (${activeCountdownsSorted.length}) ⌄`}
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           {visibleCountdownsList.length > 0 ? (
-            <div className="mt-2.5 space-y-1.5">
+            <div className={`${hasCountdownHeaderButtons ? 'mt-2.5 ' : ''}space-y-1.5`}>
               {visibleCountdownsList.map((ev: any) => {
                 const daysLeft = getDaysUntilEvent(ev.data_wydarzenia, todayStr);
                 const [ey, em, ed] = String(ev.data_wydarzenia).split('-');
@@ -6305,7 +6279,7 @@ export default function DashboardPage() {
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              📋 Tabela Operacji (Ostatnie {Math.min(1000, filteredOperationsList.length)})
+              📋 Tabela Operacji ({filteredOperationsList.length})
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -6382,7 +6356,7 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                  {filteredOperationsList.slice(0, 1000).map((op) => {
+                  {filteredOperationsList.map((op) => {
                     const client = klienciList.find(c => c.id === op.klient_id);
                     const clientName = client ? `${client.firstName || ''} ${client.lastName || ''}`.trim() : `Klubowicz #${op.klient_id}`;
                     const clientEmail = client?.email || '';
