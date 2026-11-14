@@ -124,13 +124,23 @@ const getPassStartDate = (k: any): string | null => {
   return null;
 };
 
-// HELPER: CZY KARNET JEST W TEJ CHWILI AKTYWNIE ZAWIESZONY (DATA DZISIEJSZA MIEŚCI SIĘ W OKRESIE ZAWIESZENIA)
+// HELPER: CZY KARNET JEST W TEJ CHWILI AKTYWNIE ZAWIESZONY
 const isPassCurrentlySuspended = (k: any, checkDateStr?: string) => {
   if (!k || !k.zawieszonyOd) return false;
   const d = checkDateStr || new Date().toISOString().split('T')[0];
   if (k.zawieszonyOd > d) return false;
   if (k.zawieszonyDo && k.zawieszonyDo < d) return false;
   return true;
+};
+
+// HELPER: OBLICZANIE LICZBY DNI DO WYDARZENIA DLA ZEGARA ODLICZAJĄCEGO
+const getDaysUntilEvent = (targetDateStr: string, todayDateStr: string): number => {
+  if (!targetDateStr || !todayDateStr) return 0;
+  const [ty, tm, td] = targetDateStr.split('-').map(Number);
+  const [ny, nm, nd] = todayDateStr.split('-').map(Number);
+  const targetUtc = Date.UTC(ty, (tm || 1) - 1, td || 1);
+  const todayUtc = Date.UTC(ny, (nm || 1) - 1, nd || 1);
+  return Math.round((targetUtc - todayUtc) / (1000 * 60 * 60 * 24));
 };
 
 // POWIADOMIENIA DLA TRENERÓW (ŚCIŚLE 1X NA 5 MIN PRZED I 1X PO OSTATNIM TRENINGU, BEZ DUBLI)
@@ -375,6 +385,16 @@ export default function DashboardPage() {
   // ZABEZPIECZENIE PRZED WIELOKROTNYM SZYBKIM KLIKNIĘCIEM
   const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
   const isSubmittingRef = useRef(false);
+
+  // STANY DLA ZEGARA ODLICZAJĄCEGO DO WYDARZEŃ
+  const [countdownEvents, setCountdownEvents] = useState<any[]>([]);
+  const [isCountdownModalOpen, setIsCountdownModalOpen] = useState(false);
+  const [countdownTitleInput, setCountdownTitleInput] = useState('');
+  const [countdownDateInput, setCountdownDateInput] = useState(todayStr);
+  const [isSavingCountdown, setIsSavingCountdown] = useState(false);
+  const isSavingCountdownRef = useRef(false);
+  const [confirmDeleteCountdownId, setConfirmDeleteCountdownId] = useState<number | null>(null);
+  const [showAllCountdowns, setShowAllCountdowns] = useState(false);
 
   // POMOCNIK GENEROWANIA WARIANTÓW CLASS_KEY (ODPORNY NA PREFIKSY NP. j_15)
   const getKeysVariants = (classId: string | number, dateStr: string) => {
@@ -1844,50 +1864,97 @@ export default function DashboardPage() {
     }
   };
 
+  // SZYBKIE ODŚWIEŻANIE SAMYCH WYDARZEŃ ODLICZAJĄCYCH
+  const reloadCountdownsOnly = async (roleOverride?: 'admin' | 'trener' | 'klubowicz', clientIdOverride?: number | null, emailOverride?: string | null) => {
+    try {
+      const todayNow = new Date();
+      const todayIsoNow = `${todayNow.getFullYear()}-${String(todayNow.getMonth() + 1).padStart(2, '0')}-${String(todayNow.getDate()).padStart(2, '0')}`;
+      const { data, error } = await supabase
+        .from('odliczanie_wydarzen')
+        .select('*')
+        .gte('data_wydarzenia', todayIsoNow)
+        .order('data_wydarzenia', { ascending: true })
+        .order('created_at', { ascending: true });
+
+      if (error || !data) return;
+
+      const activeRole = roleOverride || appRole;
+      const activeClientId = clientIdOverride !== undefined ? clientIdOverride : currentUser?.id;
+      const activeEmail = (emailOverride !== undefined ? emailOverride : currentUser?.email || '').toLowerCase().trim();
+
+      const visibleEvents = data
+        .filter((ev: any) => {
+          if (!ev.data_wydarzenia || ev.data_wydarzenia < todayIsoNow) return false;
+          if (ev.is_global) return true;
+          if (activeClientId && ev.klient_id && String(ev.klient_id) === String(activeClientId)) return true;
+          if (activeEmail && ev.created_by_email && ev.created_by_email.toLowerCase().trim() === activeEmail) return true;
+          return false;
+        })
+        .sort((a: any, b: any) => {
+          const cmp = String(a.data_wydarzenia).localeCompare(String(b.data_wydarzenia));
+          if (cmp !== 0) return cmp;
+          return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+        });
+
+      setCountdownEvents(visibleEvents);
+    } catch (e) {}
+  };
+
   const loadData = async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
 
     try {
+      const nowInit = new Date();
+      const todayIsoInit = `${nowInit.getFullYear()}-${String(nowInit.getMonth() + 1).padStart(2, '0')}-${String(nowInit.getDate()).padStart(2, '0')}`;
+
       const twoWeeksAgo = new Date();
       twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
       const twoWeeksAgoStr = `${twoWeeksAgo.getFullYear()}-${String(twoWeeksAgo.getMonth() + 1).padStart(2, '0')}-${String(twoWeeksAgo.getDate()).padStart(2, '0')}`;
+
+      const ninetyDaysAgo = new Date();
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      const ninetyDaysAgoIso = ninetyDaysAgo.toISOString();
 
       const oneYearForward = new Date();
       oneYearForward.setDate(oneYearForward.getDate() + 365);
       const oneYearForwardStr = `${oneYearForward.getFullYear()}-${String(oneYearForward.getMonth() + 1).padStart(2, '0')}-${String(oneYearForward.getDate()).padStart(2, '0')}`;
 
+      // ETAP 1: Sesja + słowniki + wydarzenia odliczające + zapisy (wszystko równolegle w jednym rzucie)
       const [
         rulesRes,
         sessionRes,
         trenerzyData,
-        tData,
         karnetyDefData,
-        klienciData,
+        klienciRes,
         ogloszeniaData,
         szablonyData,
         rawJednorazoweRes,
         nadpisaniaData,
-        zapisyData,
+        zapisyRes,
         rodzajeData,
         rawWydarzeniaRes,
-        limityKlubowiczowData
+        limityKlubowiczowData,
+        countdownRes
       ] = await Promise.all([
         supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
         supabase.auth.getSession(),
-        fetchAllFromSupabase('trenerzy', 'id', true, 20),
-        fetchAllFromSupabase('transakcje', 'created_at', false, 50),
-        fetchAllFromSupabase('karnety', 'id', true, 20),
-        fetchAllFromSupabase('klienci', 'id', true, 50),
-        fetchAllFromSupabase('ogloszenia', 'id', false, 20),
-        fetchAllFromSupabase('grafik_zajec', 'id', true, 20),
+        fetchAllFromSupabase('trenerzy', 'id', true, 5),
+        fetchAllFromSupabase('karnety', 'id', true, 5),
+        supabase.from('klienci').select('*').order('id', { ascending: true }).limit(2000),
+        fetchAllFromSupabase('ogloszenia', 'id', false, 5),
+        fetchAllFromSupabase('grafik_zajec', 'id', true, 5),
         supabase.from('zajecia_jednorazowe').select('*').gte('full_date_str', twoWeeksAgoStr).lte('full_date_str', oneYearForwardStr).order('full_date_str', { ascending: true }),
-        fetchAllFromSupabase('nadpisania_zajec', 'id', false, 50),
-        fetchAllFromSupabase('zapisy_zajec', 'created_at', false, 50),
-        fetchAllFromSupabase('rodzaje_zajec', 'id', true, 20),
+        fetchAllFromSupabase('nadpisania_zajec', 'id', false, 10),
+        supabase.from('zapisy_zajec').select('*').gte('created_at', ninetyDaysAgoIso).order('created_at', { ascending: false }).limit(5000),
+        fetchAllFromSupabase('rodzaje_zajec', 'id', true, 5),
         supabase.from('wydarzenia_kilkudniowe').select('*').gte('date_to', twoWeeksAgoStr).lte('date_from', oneYearForwardStr).order('date_from', { ascending: true }),
-        fetchAllFromSupabase('indywidualne_limity_zapisow', 'created_at', false, 20)
+        fetchAllFromSupabase('indywidualne_limity_zapisow', 'created_at', false, 5),
+        supabase.from('odliczanie_wydarzen').select('*').gte('data_wydarzenia', todayIsoInit).order('data_wydarzenia', { ascending: true }).order('created_at', { ascending: true })
       ]);
+
+      const klienciData = klienciRes.data || [];
+      const zapisyData = zapisyRes.data || [];
 
       if (limityKlubowiczowData) {
         setIndywidualneLimity(limityKlubowiczowData);
@@ -1934,8 +2001,22 @@ export default function DashboardPage() {
           setAppRole('klubowicz');
         }
       }
-      
-      if (tData) setWszystkieTransakcje(tData);
+
+      // OPTYMALIZACJA: Pobieramy transakcje tylko dla Administratora (z wybranego zakresu dat) lub tylko własne dla zalogowanego klienta
+      let tData: any[] = [];
+      if (determinedRole === 'admin') {
+        const rangeFrom = operationsDateRange.from || twoWeeksAgoStr;
+        const { data: adminTx } = await supabase
+          .from('transakcje')
+          .select('*')
+          .gte('created_at', `${rangeFrom}T00:00:00`)
+          .order('created_at', { ascending: false })
+          .limit(1000);
+        tData = adminTx || [];
+        setWszystkieTransakcje(tData);
+      } else {
+        setWszystkieTransakcje([]);
+      }
 
       let ustrukturyzowaneKarnetyDef: any[] = [];
       if (karnetyDefData) {
@@ -1991,6 +2072,10 @@ export default function DashboardPage() {
             try { parsedKarnety = JSON.parse(c.karnetyKlubowicza); } catch(e) {}
           }
 
+          const clientEmail = (c['E-mail'] || c.email || '').trim().toLowerCase();
+          const isCurrentLoggedClient = Boolean(userEmail && clientEmail === userEmail.trim().toLowerCase());
+          const shouldPersistPassUpdates = determinedRole === 'admin' || isCurrentLoggedClient;
+
           const futureDates = clientFutureDatesMap.get(Number(c.id)) || [];
           const hasFutureBookings = futureDates.length > 0;
           let karnetyZmienione = false;
@@ -2033,7 +2118,7 @@ export default function DashboardPage() {
               }
             }
 
-            // AUTOMATYCZNE ODWIESZENIE KARNETU GDY MINIE TERMIN ZAWIESZENIA (zawieszonyDo < dzisiaj)
+            // AUTOMATYCZNE ODWIESZENIE KARNETU GDY MINIE TERMIN ZAWIESZENIA
             if (k.zawieszonyOd && k.zawieszonyDo && k.zawieszonyDo < todayDateOnly) {
               const startD = new Date(k.zawieszonyOd);
               const endD = new Date(k.zawieszonyDo);
@@ -2171,7 +2256,7 @@ export default function DashboardPage() {
               };
               karnetyZmienione = true;
               primaryPass = parsedKarnety[0];
-            } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased) {
+            } else if (isPrimaryFinished && waitingPassIndex === -1 && isTimeBased && shouldPersistPassUpdates) {
               const hasBookingsAfterExpiry = futureDates.some(bDate => bDate > (primaryPass.waznyDo || todayDateOnly));
               if (hasBookingsAfterExpiry) {
                 const defKarnetu = ustrukturyzowaneKarnetyDef.find(dk => (dk.nazwa || '').trim().toLowerCase() === (primaryPass.nazwa || '').trim().toLowerCase());
@@ -2238,7 +2323,7 @@ export default function DashboardPage() {
             return true;
           });
 
-          if (karnetyZmienione || walletChanged) {
+          if ((karnetyZmienione || walletChanged) && shouldPersistPassUpdates) {
             const updatePayload: any = { 
               karnetyKlubowicza: parsedKarnety,
               hasLostContinuity: continuityBroken,
@@ -2252,7 +2337,7 @@ export default function DashboardPage() {
           }
 
           const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
-          const clientTransakcje = tData ? tData.filter((t: any) => t.klient_id === c.id) : [];
+          const clientTransakcje = (determinedRole === 'admin' && tData) ? tData.filter((t: any) => t.klient_id === c.id) : [];
 
           return {
             ...c,
@@ -2288,7 +2373,9 @@ export default function DashboardPage() {
         }));
 
         setKlienciList(enriched);
-        checkContractPaymentEnforcement(enriched);
+        if (determinedRole === 'admin') {
+          checkContractPaymentEnforcement(enriched);
+        }
         
         if (userEmail) {
           matchedCurrentClient = enriched.find((c: any) => c.email === userEmail);
@@ -2300,9 +2387,36 @@ export default function DashboardPage() {
         if (profileClient) {
           const currentActive = enriched.find((c: any) => c.id === profileClient.id);
           if (currentActive) {
-            setProfileClient(currentActive);
+            // Dla admina dociągamy pełną historię transakcji konkretnego profilu przy jego podglądzie
+            const { data: profileTx } = await supabase
+              .from('transakcje')
+              .select('*')
+              .eq('klient_id', currentActive.id)
+              .order('created_at', { ascending: false })
+              .limit(200);
+            setProfileClient({ ...currentActive, transakcje: profileTx || currentActive.transakcje || [] });
           }
         }
+      }
+
+      // FILTROWANIE I SORTOWANIE WYDARZEŃ ODLICZAJĄCYCH (NAJBLIŻSZE NA GÓRZE)
+      if (!countdownRes.error && countdownRes.data) {
+        const activeClientId = matchedCurrentClient?.id || null;
+        const activeEmail = (userEmail || '').toLowerCase().trim();
+        const visibleCountdowns = countdownRes.data
+          .filter((ev: any) => {
+            if (!ev.data_wydarzenia || ev.data_wydarzenia < todayIsoInit) return false;
+            if (ev.is_global) return true;
+            if (activeClientId && ev.klient_id && String(ev.klient_id) === String(activeClientId)) return true;
+            if (activeEmail && ev.created_by_email && ev.created_by_email.toLowerCase().trim() === activeEmail) return true;
+            return false;
+          })
+          .sort((a: any, b: any) => {
+            const cmp = String(a.data_wydarzenia).localeCompare(String(b.data_wydarzenia));
+            if (cmp !== 0) return cmp;
+            return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+          });
+        setCountdownEvents(visibleCountdowns);
       }
 
       if (ogloszeniaData) {
@@ -2402,7 +2516,7 @@ export default function DashboardPage() {
           isUsunięte: false
         }));
       } else {
-        const fallbackJednorazowe = await fetchAllFromSupabase('zajecia_jednorazowe', 'id', false, 20);
+        const fallbackJednorazowe = await fetchAllFromSupabase('zajecia_jednorazowe', 'id', false, 5);
         if (fallbackJednorazowe) {
           mappedJednorazowe = fallbackJednorazowe.map((j: any) => ({
             ...j,
@@ -2566,7 +2680,7 @@ export default function DashboardPage() {
           dateTo: w.date_to 
         })));
       } else {
-        const fallbackWydarzenia = await fetchAllFromSupabase('wydarzenia_kilkudniowe', 'date_from', true, 20);
+        const fallbackWydarzenia = await fetchAllFromSupabase('wydarzenia_kilkudniowe', 'date_from', true, 5);
         if (fallbackWydarzenia) {
           setWydarzeniaKilkudniowe(fallbackWydarzenia.map((w: any) => ({ 
             id: w.id, 
@@ -2587,27 +2701,37 @@ export default function DashboardPage() {
   useEffect(() => {
     loadData();
 
+    let reloadTimeout: ReturnType<typeof setTimeout> | null = null;
+    const scheduleReload = () => {
+      if (reloadTimeout) clearTimeout(reloadTimeout);
+      reloadTimeout = setTimeout(() => {
+        loadData();
+      }, 400);
+    };
+
     const channel = supabase
       .channel('realtime-dashboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'wydarzenia_kilkudniowe' }, () => loadData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'indywidualne_limity_zapisow' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zapisy_zajec' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'automatyczne_zapisy' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'klienci' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'nadpisania_zajec' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'wydarzenia_kilkudniowe' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'indywidualne_limity_zapisow' }, scheduleReload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'odliczanie_wydarzen' }, scheduleReload)
       .subscribe();
 
     const reminderInterval = setInterval(() => {
       loadData();
     }, 60000);
 
-    window.addEventListener('storage', loadData);
+    window.addEventListener('storage', scheduleReload);
     return () => {
+      if (reloadTimeout) clearTimeout(reloadTimeout);
       clearInterval(reminderInterval);
       supabase.removeChannel(channel);
-      window.removeEventListener('storage', loadData);
+      window.removeEventListener('storage', scheduleReload);
     };
-  }, [selectedWeekDate]);
+  }, [selectedWeekDate, operationsDateRange.from]);
 
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
@@ -3026,6 +3150,91 @@ export default function DashboardPage() {
     }]);
     await loadData();
     showToast(nextUsunięteState ? "Zajęcia zostały usunięte." : "Zajęcia zostały pomyślnie przywrócone!");
+  };
+
+  // ZAPIS NOWEGO WYDARZENIA DO ZEGARA ODLICZAJĄCEGO (Z OCHRONĄ PRZED DUBLOWANIEM)
+  const handleSaveCountdownEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingCountdownRef.current || isSavingCountdown) return;
+
+    const cleanTitle = countdownTitleInput.trim();
+    if (!cleanTitle) {
+      showToast("Podaj nazwę wydarzenia!", 'warning');
+      return;
+    }
+    if (!countdownDateInput) {
+      showToast("Wybierz datę wydarzenia!", 'warning');
+      return;
+    }
+    if (countdownDateInput < todayStr) {
+      showToast("Data wydarzenia nie może być z przeszłości.", 'warning');
+      return;
+    }
+
+    const isGlobalEvent = appRole === 'admin';
+
+    // Sprawdzenie duplikatów o tej samej nazwie i dacie w tym samym zakresie (globalny vs prywatny)
+    const alreadyExists = countdownEvents.some((ev: any) =>
+      Boolean(ev.is_global) === isGlobalEvent &&
+      String(ev.data_wydarzenia) === String(countdownDateInput) &&
+      normalizeText(ev.tytul || '') === normalizeText(cleanTitle)
+    );
+
+    if (alreadyExists) {
+      showToast("Takie wydarzenie w tym dniu jest już dodane do odliczania.", 'info');
+      return;
+    }
+
+    isSavingCountdownRef.current = true;
+    setIsSavingCountdown(true);
+
+    try {
+      const payload = {
+        tytul: cleanTitle,
+        data_wydarzenia: countdownDateInput,
+        is_global: isGlobalEvent,
+        klient_id: isGlobalEvent ? null : (currentUser?.id || null),
+        created_by_email: currentUser?.email || (isGlobalEvent ? 'maciejklaput@gmail.com' : null)
+      };
+
+      const { error } = await supabase.from('odliczanie_wydarzen').insert([payload]);
+      if (error) {
+        console.error("Błąd zapisu odliczania:", error);
+        showToast("Nie udało się zapisać wydarzenia: " + error.message, 'error');
+        return;
+      }
+
+      setCountdownTitleInput('');
+      setCountdownDateInput(todayStr);
+      setIsCountdownModalOpen(false);
+      await reloadCountdownsOnly();
+      showToast(isGlobalEvent ? "Dodano globalne odliczanie dla wszystkich klubowiczów!" : "Dodano Twoje wydarzenie do odliczania!");
+    } finally {
+      isSavingCountdownRef.current = false;
+      setIsSavingCountdown(false);
+    }
+  };
+
+  // USUWANIE WYDARZENIA Z ZEGARA ODLICZAJĄCEGO
+  const handleDeleteCountdownEvent = async (ev: any) => {
+    if (!ev || !ev.id) return;
+    if (ev.is_global && appRole !== 'admin') {
+      showToast("Tylko administrator może usunąć wydarzenie klubowe.", 'error');
+      return;
+    }
+
+    setCountdownEvents(prev => prev.filter(item => item.id !== ev.id));
+    setConfirmDeleteCountdownId(null);
+
+    const { error } = await supabase.from('odliczanie_wydarzen').delete().eq('id', ev.id);
+    if (error) {
+      console.error("Błąd usuwania odliczania:", error);
+      await reloadCountdownsOnly();
+      showToast("Nie udało się usunąć wydarzenia.", 'error');
+      return;
+    }
+
+    showToast("Usunięto wydarzenie z odliczania.");
   };
 
   const updateSupabaseClient = async (updatedClient: any, payload: any) => {
@@ -4111,10 +4320,10 @@ export default function DashboardPage() {
       const posiadaAktywnyKarnet = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
         const passStart = getPassStartDate(k);
-        if (passStart && calcClassDateStr < passStart) return false; // BLOKADA: Karnet zaczyna obowiązywać dopiero po terminie tych zajęć
-        if (isContractPass(k)) return true; // Umowa 12M wyłączona z blokady wygaśnięcia
+        if (passStart && calcClassDateStr < passStart) return false;
+        if (isContractPass(k)) return true;
         if (k.waznyDo && k.waznyDo < todayDateOnly) return false;
-        if (k.waznyDo && k.waznyDo < calcClassDateStr) return false; // BLOKADA: Trening po wygaśnięciu karnetu
+        if (k.waznyDo && k.waznyDo < calcClassDateStr) return false;
         if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
           if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
         }
@@ -4147,7 +4356,7 @@ export default function DashboardPage() {
       const passAllowsThisClass = karnetyUzytkownika.some((k: any) => {
         if (!k) return false;
         const passStart = getPassStartDate(k);
-        if (passStart && calcClassDateStr < passStart) return false; // Karnet oczekujący na przyszłą datę nie obowiązuje w tym dniu
+        if (passStart && calcClassDateStr < passStart) return false;
         if (!isContractPass(k) && k.waznyDo && (k.waznyDo < todayDateOnly || k.waznyDo < calcClassDateStr)) return false;
         if (isQuantityPass(k) && k.pozostaloWejsc !== null && k.pozostaloWejsc !== undefined) {
           if (parseInt(k.pozostaloWejsc, 10) <= 0) return false;
@@ -4241,7 +4450,6 @@ export default function DashboardPage() {
         return; 
       }
 
-      // Dopasowanie karnetu obowiązującego dokładnie w dniu zajęć (dla limitu okna zapisów i limitu dziennego)
       const activePassForClassDate = karnetyUzytkownika.find((k: any) =>
         isPassValidForClassDate(k, calcClassDateStr, todayDateOnly) &&
         checkPassAllowsClass(k, selectedClass.title, dostepneKarnety)
@@ -4994,7 +5202,6 @@ export default function DashboardPage() {
         return;
       }
 
-      // SPRAWDZENIE CZY KLIENT MA KARNET OBOWIĄZUJĄCY W TYM DNIU (waznyOd <= calcClassDateStr <= waznyDo)
       const hasAnyValidPassOnClassDate = (klient.karnetyKlubowicza || []).some((k: any) =>
         isPassValidForClassDate(k, calcClassDateStr, dzisiajData)
       );
@@ -5543,6 +5750,14 @@ export default function DashboardPage() {
     return opisText.includes(q) || opTypeText.includes(q) || clientName.includes(q) || clientEmail.includes(q);
   });
 
+  const activeCountdownsSorted = [...countdownEvents]
+    .filter((ev: any) => ev.data_wydarzenia && ev.data_wydarzenia >= todayStr)
+    .sort((a: any, b: any) => String(a.data_wydarzenia).localeCompare(String(b.data_wydarzenia)));
+
+  const visibleCountdownsList = showAllCountdowns
+    ? activeCountdownsSorted
+    : activeCountdownsSorted.slice(0, 2);
+
   return (
     <div className="max-w-[1700px] mx-auto space-y-6 pb-24 font-sans antialiased text-slate-800 relative">
       {/* SYSTEM POWIADOMIEŃ TOAST */}
@@ -5566,6 +5781,139 @@ export default function DashboardPage() {
           </span>
           <p className="text-xs font-bold tracking-wide text-white">{toastMessage.text}</p>
         </div>
+      )}
+
+      {/* SEKCJA: ZEGAR ODLICZAJĄCY DO WYDARZEŃ (KOMPAKTOWY PASEK NA GÓRZE - W NATURALNYM UKŁADZIE STRONY) */}
+      {(activeCountdownsSorted.length > 0 || ['klubowicz', 'trener'].includes(appRole)) && (
+        <section className="bg-gradient-to-r from-slate-900 via-sky-950 to-slate-900 border border-sky-800/70 rounded-2xl px-4 py-3 shadow-sm text-white">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-sm">⏳</span>
+              <span className="text-[11px] font-black uppercase tracking-wider text-sky-200">
+                Odliczanie do wydarzeń
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {['klubowicz', 'trener'].includes(appRole) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCountdownTitleInput('');
+                    setCountdownDateInput(todayStr);
+                    setIsCountdownModalOpen(true);
+                  }}
+                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-[10px] sm:text-[11px] px-3 py-1 rounded-xl uppercase tracking-wider transition-colors cursor-pointer shadow-xs flex items-center gap-1"
+                >
+                  <span>+</span>
+                  <span>Dodaj wydarzenie</span>
+                </button>
+              )}
+
+              {activeCountdownsSorted.length > 2 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllCountdowns(!showAllCountdowns)}
+                  className="bg-white/10 hover:bg-white/20 text-sky-100 border border-white/15 font-bold text-[10px] sm:text-[11px] px-2.5 py-1 rounded-xl uppercase tracking-wider transition-colors cursor-pointer"
+                >
+                  {showAllCountdowns ? 'Zwiń ⌃' : `Wszystkie (${activeCountdownsSorted.length}) ⌄`}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {visibleCountdownsList.length > 0 ? (
+            <div className="mt-2.5 space-y-1.5">
+              {visibleCountdownsList.map((ev: any) => {
+                const daysLeft = getDaysUntilEvent(ev.data_wydarzenia, todayStr);
+                const [ey, em, ed] = String(ev.data_wydarzenia).split('-');
+                const formattedEvDate = `${ed}.${em}.${ey}`;
+                const canDeleteThis = appRole === 'admin' || !ev.is_global;
+
+                return (
+                  <div
+                    key={ev.id}
+                    className="flex items-center justify-between gap-2 bg-white/[0.07] border border-white/10 rounded-xl px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span
+                        className={`shrink-0 text-[10px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                          ev.is_global
+                            ? 'bg-sky-500/25 text-sky-200 border border-sky-400/40'
+                            : 'bg-amber-400/20 text-amber-200 border border-amber-400/40'
+                        }`}
+                      >
+                        {ev.is_global ? 'KLUB' : 'MOJE'}
+                      </span>
+                      <span className="font-black text-xs sm:text-sm text-white truncate">
+                        {ev.tytul}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-300 shrink-0 hidden sm:inline">
+                        ({formattedEvDate})
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] font-mono text-slate-300 sm:hidden">
+                        {ed}.{em}
+                      </span>
+
+                      <span
+                        className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-black uppercase tracking-wider shadow-xs ${
+                          daysLeft <= 0
+                            ? 'bg-emerald-400 text-slate-950'
+                            : daysLeft === 1
+                            ? 'bg-amber-400 text-slate-950'
+                            : 'bg-white text-slate-950'
+                        }`}
+                      >
+                        {daysLeft <= 0
+                          ? '🔥 DZISIAJ!'
+                          : daysLeft === 1
+                          ? '⚡ JUTRO'
+                          : `ZA ${daysLeft} DNI`}
+                      </span>
+
+                      {canDeleteThis && (
+                        confirmDeleteCountdownId === ev.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCountdownEvent(ev)}
+                              className="bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-black px-2 py-1 rounded-lg cursor-pointer"
+                            >
+                              Usuń
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteCountdownId(null)}
+                              className="bg-white/15 hover:bg-white/25 text-slate-200 text-[10px] font-bold px-1.5 py-1 rounded-lg cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteCountdownId(ev.id)}
+                            className="text-slate-400 hover:text-rose-300 text-xs px-1.5 py-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+                            title="Usuń wydarzenie"
+                          >
+                            🗑️
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="mt-1.5 text-[11px] text-sky-200/80">
+              Brak zaplanowanych wydarzeń. Dodaj własne odliczanie (np. zawody, wyjazd lub cel treningowy).
+            </div>
+          )}
+        </section>
       )}
 
       {/* SEKCJA: OGŁOSZENIA SPERSONALIZOWANE */}
@@ -5942,8 +6290,8 @@ export default function DashboardPage() {
 
       {/* PANEL GŁÓWNY: PRZEŁĄCZNIK WIDOKÓW DLA ADMINA */}
       {appRole === 'admin' && (
-        <div className="flex items-center justify-between bg-white border border-sky-200 p-3 rounded-2xl shadow-sm">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-white border border-sky-200 p-3 rounded-2xl shadow-sm">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setAdminViewTab('grafik')}
               className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
@@ -5965,7 +6313,17 @@ export default function DashboardPage() {
               📋 Tabela Operacji (Ostatnie {Math.min(1000, filteredOperationsList.length)})
             </button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button 
+              onClick={() => {
+                setCountdownTitleInput('');
+                setCountdownDateInput(todayStr);
+                setIsCountdownModalOpen(true);
+              }}
+              className="bg-sky-900 hover:bg-sky-800 text-white px-3.5 py-2 rounded-xl text-xs font-black transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>⏳</span> + ODLICZANIE
+            </button>
             {adminViewTab === 'grafik' && (
               <button 
                 onClick={() => {
@@ -8382,6 +8740,81 @@ export default function DashboardPage() {
               <div className="pt-4 flex justify-end gap-2 border-t border-sky-100">
                 <button type="button" onClick={() => setIsTopUpWalletOpen(false)} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer">Anuluj</button>
                 <button type="submit" className="bg-amber-600 hover:bg-amber-700 text-white font-black px-6 py-2.5 rounded-xl cursor-pointer">Zatwierdź zmianę</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DODAJ WYDARZENIE DO ZEGARA ODLICZAJĄCEGO */}
+      {isCountdownModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 border border-sky-200">
+            <div className="flex items-center justify-between border-b border-sky-100 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">⏳</span>
+                <h3 className="font-black text-sm text-sky-950 uppercase tracking-wider">
+                  {appRole === 'admin' ? 'Dodaj globalne odliczanie' : 'Dodaj odliczanie do wydarzenia'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCountdownModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCountdownEvent} className="space-y-4 text-xs">
+              <div className="bg-sky-50 border border-sky-200/80 rounded-2xl p-3 text-sky-950 font-medium leading-relaxed">
+                {appRole === 'admin'
+                  ? 'Wydarzenie dodane przez Ciebie będzie widoczne na górze strony głównej u wszystkich klubowiczów i trenerów aż do dnia wydarzenia włącznie.'
+                  : 'Dodaj własne wydarzenie (np. zawody, HYROX, wyjazd). Będzie widoczne wyłącznie na Twoim koncie do dnia wydarzenia włącznie.'}
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Nazwa wydarzenia *</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={80}
+                  placeholder={appRole === 'admin' ? 'np. HYROX POZNAŃ / ZAWODY KLUBOWE' : 'np. Mój start w HYROX / Obóz'}
+                  value={countdownTitleInput}
+                  onChange={(e) => setCountdownTitleInput(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Data wydarzenia *</label>
+                <input
+                  type="date"
+                  required
+                  min={todayStr}
+                  value={countdownDateInput}
+                  onChange={(e) => setCountdownDateInput(e.target.value)}
+                  className="w-full bg-sky-50/50 border border-sky-200 rounded-xl px-3.5 py-2.5 font-bold text-slate-800 focus:outline-none focus:border-sky-500 cursor-pointer"
+                />
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2 border-t border-sky-100">
+                <button
+                  type="button"
+                  onClick={() => setIsCountdownModalOpen(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingCountdown}
+                  className={`bg-sky-950 hover:bg-sky-900 text-white font-black px-6 py-2.5 rounded-xl uppercase tracking-wider shadow-sm transition-colors cursor-pointer ${
+                    isSavingCountdown ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                >
+                  {isSavingCountdown ? 'Zapisywanie...' : 'Dodaj do zegara'}
+                </button>
               </div>
             </form>
           </div>
