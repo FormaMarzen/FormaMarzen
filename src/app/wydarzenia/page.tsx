@@ -25,6 +25,15 @@ export interface ZamowienieKoszulki {
   data_zamowienia?: string;
 }
 
+export interface ProgCenowy {
+  id?: number;
+  wydarzenie_id?: number;
+  cena: string;
+  data_do: string;
+  liczba_miejsc: number;
+  kolejnosc?: number;
+}
+
 interface KlientBaza {
   id: string | number;
   imie: string;
@@ -49,6 +58,7 @@ interface Wydarzenie {
   grafika_url: string | null;
   status: string;
   uczestnicy?: Uczestnik[];
+  progi_cenowe?: ProgCenowy[];
   
   pokaz_whatsapp?: boolean;
   whatsapp_url?: string | null;
@@ -89,12 +99,27 @@ export const obliczReszteKwoty = (cena?: string | null, zadatek?: string | null)
   return `${roznica} PLN`;
 };
 
-// Funkcja pomocnicza do formatowania waluty/procentów
 const formatDiscountAmount = (amount: number, unit: string) => {
   if (unit === '%') {
     return `${amount}%`;
   }
   return `${amount} PLN`;
+};
+
+export const getSortedProgi = (progi?: ProgCenowy[]): ProgCenowy[] => {
+  if (!Array.isArray(progi) || progi.length === 0) return [];
+  return [...progi].sort((a, b) => {
+    const dateCompare = (a.data_do || "").localeCompare(b.data_do || "");
+    if (dateCompare !== 0) return dateCompare;
+    return (a.kolejnosc || 0) - (b.kolejnosc || 0);
+  });
+};
+
+export const getActiveProgCenowy = (progi?: ProgCenowy[], todayStr?: string): ProgCenowy | null => {
+  const sorted = getSortedProgi(progi);
+  if (sorted.length === 0) return null;
+  const today = todayStr || new Date().toISOString().split("T")[0];
+  return sorted.find((p) => p.data_do && p.data_do >= today) || null;
 };
 
 export default function WydarzeniaPage() {
@@ -140,6 +165,7 @@ export default function WydarzeniaPage() {
     grafika_url: "" as string | null,
     status: "wkrotce",
     uczestnicy: [] as Uczestnik[],
+    progi_cenowe: [] as ProgCenowy[],
     
     pokaz_whatsapp: false,
     whatsapp_url: "",
@@ -275,7 +301,9 @@ export default function WydarzeniaPage() {
 
       if (diffDays === 5 || diffDays === 2) {
         const nieoplaceni = w.uczestnicy.filter(u => u.status_platnosci !== "calosc");
-        const kwotaReszty = obliczReszteKwoty(w.cena, w.zadatek);
+        const activeProg = getActiveProgCenowy(w.progi_cenowe, dzisiajStr);
+        const kwotaBazowa = w.cena || activeProg?.cena;
+        const kwotaReszty = obliczReszteKwoty(kwotaBazowa, w.zadatek);
         const formatTerminu = formatDatePL(w.reszta_do);
 
         for (const u of nieoplaceni) {
@@ -328,10 +356,11 @@ export default function WydarzeniaPage() {
     setIsLoading(true);
 
     try {
-      const [sessionRes, wydarzeniaRes, klienciRes] = await Promise.all([
+      const [sessionRes, wydarzeniaRes, klienciRes, progiRes] = await Promise.all([
         supabase.auth.getSession(),
         supabase.from("wydarzenia").select("*").order("data_od", { ascending: true }),
-        supabase.from("klienci").select('id, "Imię", "Nazwisko", "E-mail", camp_discount_type, camp_discount_amount, camp_discount_unit, camp_discount_expiration')
+        supabase.from("klienci").select('id, "Imię", "Nazwisko", "E-mail", camp_discount_type, camp_discount_amount, camp_discount_unit, camp_discount_expiration'),
+        supabase.from("wydarzenia_progi_cenowe").select("*").order("data_do", { ascending: true }).order("kolejnosc", { ascending: true })
       ]);
 
       const email = sessionRes.data.session?.user?.email || "";
@@ -373,14 +402,23 @@ export default function WydarzeniaPage() {
         }
       }
 
+      const allProgi: ProgCenowy[] = (!progiRes.error && Array.isArray(progiRes.data)) ? progiRes.data : [];
+
       if (!wydarzeniaRes.error && wydarzeniaRes.data) {
-        setWydarzenia(wydarzeniaRes.data);
-        checkUnreadEvents(wydarzeniaRes.data, adminRole);
+        const enrichedEvents: Wydarzenie[] = wydarzeniaRes.data.map((ev: Wydarzenie) => ({
+          ...ev,
+          progi_cenowe: getSortedProgi(
+            allProgi.filter((p) => Number(p.wydarzenie_id) === Number(ev.id))
+          )
+        }));
+
+        setWydarzenia(enrichedEvents);
+        checkUnreadEvents(enrichedEvents, adminRole);
         if (selectedEvent) {
-          const refreshed = wydarzeniaRes.data.find((w: Wydarzenie) => w.id === selectedEvent.id);
+          const refreshed = enrichedEvents.find((w: Wydarzenie) => w.id === selectedEvent.id);
           if (refreshed) setSelectedEvent(refreshed);
         }
-        sprawdzIwyslijPrzypomnieniaPlatnosci(wydarzeniaRes.data, mappedKlienci);
+        sprawdzIwyslijPrzypomnieniaPlatnosci(enrichedEvents, mappedKlienci);
       }
     } catch (err) {
       console.error("Błąd podczas pobierania danych:", err);
@@ -489,6 +527,39 @@ export default function WydarzeniaPage() {
     return Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
   }, [selectedEvent]);
 
+  const handleAddProgCenowy = () => {
+    setForm(prev => ({
+      ...prev,
+      progi_cenowe: [
+        ...prev.progi_cenowe,
+        {
+          cena: "",
+          data_do: prev.zadatek_do || dzisiajStr,
+          liczba_miejsc: 5,
+          kolejnosc: prev.progi_cenowe.length + 1
+        }
+      ]
+    }));
+  };
+
+  const handleUpdateProgCenowy = (index: number, field: keyof ProgCenowy, value: string | number) => {
+    setForm(prev => {
+      const updated = [...prev.progi_cenowe];
+      updated[index] = {
+        ...updated[index],
+        [field]: value
+      };
+      return { ...prev, progi_cenowe: updated };
+    });
+  };
+
+  const handleRemoveProgCenowy = (indexToRemove: number) => {
+    setForm(prev => ({
+      ...prev,
+      progi_cenowe: prev.progi_cenowe.filter((_, idx) => idx !== indexToRemove)
+    }));
+  };
+
   const handleOpenAdd = () => {
     setEditingId(null);
     setForm({ 
@@ -503,6 +574,7 @@ export default function WydarzeniaPage() {
       grafika_url: null, 
       status: "wkrotce", 
       uczestnicy: [], 
+      progi_cenowe: [],
       pokaz_whatsapp: false, 
       whatsapp_url: "", 
       pokaz_zbiorka: false, 
@@ -542,6 +614,7 @@ export default function WydarzeniaPage() {
       grafika_url: w.grafika_url || null,
       status: w.status || "wkrotce",
       uczestnicy: Array.isArray(w.uczestnicy) ? w.uczestnicy.map(u => ({ ...u, status_platnosci: u.status_platnosci || "nieoplacone" })) : [],
+      progi_cenowe: Array.isArray(w.progi_cenowe) ? getSortedProgi(w.progi_cenowe) : [],
       
       pokaz_whatsapp: !!w.pokaz_whatsapp,
       whatsapp_url: w.whatsapp_url || "",
@@ -889,7 +962,6 @@ export default function WydarzeniaPage() {
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Nie udało się zainicjalizować płatności Autopay.');
       }
-
       const payForm = document.createElement('form');
       payForm.method = 'POST';
       payForm.action = data.gatewayUrl;
@@ -956,11 +1028,52 @@ export default function WydarzeniaPage() {
     };
 
     try {
+      let targetEventId: number | null = editingId;
+
       if (editingId) {
-        await supabase.from("wydarzenia").update(payload).eq("id", editingId);
+        const { error } = await supabase.from("wydarzenia").update(payload).eq("id", editingId);
+        if (error) throw error;
       } else {
-        await supabase.from("wydarzenia").insert([payload]);
+        const { data: insertedData, error } = await supabase
+          .from("wydarzenia")
+          .insert([payload])
+          .select("id")
+          .single();
+        if (error) throw error;
+        if (insertedData?.id) {
+          targetEventId = Number(insertedData.id);
+        }
       }
+
+      if (targetEventId) {
+        await supabase
+          .from("wydarzenia_progi_cenowe")
+          .delete()
+          .eq("wydarzenie_id", targetEventId);
+
+        const validProgi = getSortedProgi(
+          form.progi_cenowe.filter((p) => p.cena.trim() !== "" && p.data_do)
+        );
+
+        if (validProgi.length > 0) {
+          const progiRows = validProgi.map((p, idx) => ({
+            wydarzenie_id: targetEventId,
+            cena: p.cena.trim(),
+            data_do: p.data_do,
+            liczba_miejsc: Number(p.liczba_miejsc) || 0,
+            kolejnosc: idx + 1
+          }));
+
+          const { error: progiError } = await supabase
+            .from("wydarzenia_progi_cenowe")
+            .insert(progiRows);
+
+          if (progiError) {
+            console.error("Błąd zapisu progów cenowych:", progiError);
+          }
+        }
+      }
+
       setIsAdminModalOpen(false);
       await fetchData();
     } catch (err) {
@@ -1044,8 +1157,10 @@ export default function WydarzeniaPage() {
   };
 
   const formResztaKwoty = useMemo(() => {
-    return obliczReszteKwoty(form.cena, form.zadatek);
-  }, [form.cena, form.zadatek]);
+    const activeFormProg = getActiveProgCenowy(form.progi_cenowe, dzisiajStr) || getSortedProgi(form.progi_cenowe)[0];
+    const bazowaCena = form.cena.trim() ? form.cena : activeFormProg?.cena;
+    return obliczReszteKwoty(bazowaCena, form.zadatek);
+  }, [form.cena, form.zadatek, form.progi_cenowe, dzisiajStr]);
 
   const handleOpenEventModal = (w: Wydarzenie) => {
     markEventAsSeen(w.id);
@@ -1060,7 +1175,11 @@ export default function WydarzeniaPage() {
     const koszulkiCount = Array.isArray(w.koszulki_zamowienia) ? w.koszulki_zamowienia.length : 0;
     const oplaconeZadatekCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "zadatek").length : 0;
     const oplaconeCaloscCount = Array.isArray(w.uczestnicy) ? w.uczestnicy.filter(u => u.status_platnosci === "calosc").length : 0;
-    const eventPriceDetails = !isPast ? calculateDiscountedPrice(w.cena) : null;
+    
+    const sortedCardProgi = getSortedProgi(w.progi_cenowe);
+    const activeCardProg = getActiveProgCenowy(sortedCardProgi, dzisiajStr);
+    const effectiveCardPrice = activeCardProg?.cena || w.cena || (sortedCardProgi.length > 0 ? sortedCardProgi[sortedCardProgi.length - 1].cena : "");
+    const eventPriceDetails = !isPast ? calculateDiscountedPrice(effectiveCardPrice) : null;
 
     return (
       <div 
@@ -1135,6 +1254,13 @@ export default function WydarzeniaPage() {
               </div>
             )}
 
+            {activeCardProg && !isPast && (
+              <div className="py-1 px-2.5 bg-amber-50 border border-amber-200/80 rounded-lg text-[11px] font-bold text-amber-900 flex items-center gap-1">
+                <span>🏷️</span>
+                <span>Do {formatDatePL(activeCardProg.data_do)} ({activeCardProg.liczba_miejsc} miejsc)</span>
+              </div>
+            )}
+
             {w.pokaz_koszulki && koszulkiCount > 0 && isAdmin && (
               <div className="py-1 px-2.5 bg-indigo-50 rounded-lg text-[11px] font-bold text-indigo-900 flex items-center gap-1.5">
                 <span>👕</span>
@@ -1152,14 +1278,16 @@ export default function WydarzeniaPage() {
 
           <div className="mt-4 pt-4 border-t border-sky-50 flex items-center justify-between relative">
             <div className="flex flex-col">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cena wydarzenia</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                {activeCardProg && !isPast ? "Aktualna cena" : "Cena wydarzenia"}
+              </span>
               {activeDiscountDetails && eventPriceDetails?.discountAmount && eventPriceDetails.discountAmount > 0 && !isAdmin && !isPast ? (
                 <div className="flex flex-col mt-0.5">
                   <span className="line-through text-slate-400 text-[10px] font-medium leading-none">{eventPriceDetails.originalPrice}</span>
                   <span className="font-black text-emerald-600 text-base leading-tight">{eventPriceDetails.finalPriceStr}</span>
                 </div>
               ) : (
-                <span className="font-black text-sky-900 text-base">{w.cena || "Darmowe"}</span>
+                <span className="font-black text-sky-900 text-base">{effectiveCardPrice || "Darmowe"}</span>
               )}
             </div>
 
@@ -1196,7 +1324,13 @@ export default function WydarzeniaPage() {
   const koszulkiExpired = selectedEvent ? isKoszulkiZamkniete(selectedEvent) : false;
   const enrolledInSelected = isUserZapisany(selectedEvent);
   const mapsLink = selectedEvent ? getGoogleMapsLink(selectedEvent?.google_maps_url, selectedEvent?.zbiorka) : null;
-  const priceDetails = selectedEvent ? calculateDiscountedPrice(selectedEvent.cena) : null;
+  
+  const sortedSelectedProgi = selectedEvent ? getSortedProgi(selectedEvent.progi_cenowe) : [];
+  const activeSelectedProg = selectedEvent ? getActiveProgCenowy(sortedSelectedProgi, dzisiajStr) : null;
+  const effectiveSelectedCena = selectedEvent
+    ? (activeSelectedProg?.cena || selectedEvent.cena || (sortedSelectedProgi.length > 0 ? sortedSelectedProgi[sortedSelectedProgi.length - 1].cena : ""))
+    : "";
+  const priceDetails = selectedEvent ? calculateDiscountedPrice(effectiveSelectedCena) : null;
 
   const hasAnyParticipantModule = selectedEvent && (
     (selectedEvent.pokaz_whatsapp && selectedEvent.whatsapp_url) ||
@@ -1388,8 +1522,16 @@ export default function WydarzeniaPage() {
                      </div>
                   )}
                   <div className="w-full z-10 relative">
-                    <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest leading-tight">Cena całkowita</div>
-                    <div className="h-3.5"></div>
+                    <div className="text-[10px] font-bold text-amber-500 uppercase tracking-widest leading-tight">
+                      {activeSelectedProg ? "Aktualna cena" : "Cena całkowita"}
+                    </div>
+                    {activeSelectedProg ? (
+                      <div className="text-[9px] font-semibold text-amber-600 mt-0.5 leading-tight">
+                        (do {formatDatePL(activeSelectedProg.data_do)})
+                      </div>
+                    ) : (
+                      <div className="h-3.5"></div>
+                    )}
                     <div className="font-black text-amber-950 text-xs sm:text-sm mt-0.5 flex flex-col items-center">
                        {activeDiscountDetails && priceDetails?.discountAmount && priceDetails.discountAmount > 0 && !isAdmin ? (
                          <>
@@ -1397,7 +1539,7 @@ export default function WydarzeniaPage() {
                            <span className="text-emerald-600 text-base">{priceDetails.finalPriceStr}</span>
                          </>
                        ) : (
-                         <span>{selectedEvent?.cena || "Darmowe"}</span>
+                         <span>{effectiveSelectedCena || "Darmowe"}</span>
                        )}
                     </div>
                   </div>
@@ -1448,12 +1590,111 @@ export default function WydarzeniaPage() {
                        {activeDiscountDetails && priceDetails?.discountAmount && priceDetails.discountAmount > 0 && !isAdmin ? (
                          obliczReszteKwoty(priceDetails.finalPriceStr, selectedEvent?.zadatek)
                        ) : (
-                         obliczReszteKwoty(selectedEvent?.cena, selectedEvent?.zadatek)
+                         obliczReszteKwoty(effectiveSelectedCena, selectedEvent?.zadatek)
                        )}
                     </div>
                   </div>
                 </div>
               </div>
+
+              {/* PROGI CENOWE / SYSTEM ZACHĘCAJĄCY */}
+              {sortedSelectedProgi.length > 0 && (
+                <div className="bg-white p-5 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-amber-200 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-100 pb-3">
+                    <h3 className="font-black text-xs sm:text-sm text-sky-950 uppercase tracking-widest flex items-center gap-2">
+                      <span className="text-lg">🏷️</span> Pule cenowe i dostępność miejsc
+                    </h3>
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 self-start sm:self-auto">
+                      Oferta terminowa
+                    </span>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {sortedSelectedProgi.map((prog, idx) => {
+                      const isExpired = prog.data_do < dzisiajStr;
+                      const isCurrent =
+                        !isExpired &&
+                        activeSelectedProg !== null &&
+                        activeSelectedProg.data_do === prog.data_do &&
+                        activeSelectedProg.cena === prog.cena &&
+                        activeSelectedProg.liczba_miejsc === prog.liczba_miejsc;
+                      const progDiscounted = !isExpired ? calculateDiscountedPrice(prog.cena) : null;
+
+                      return (
+                        <div
+                          key={prog.id || idx}
+                          className={`p-3.5 sm:p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-all ${
+                            isExpired
+                              ? "bg-slate-50 border-slate-200/80 opacity-65"
+                              : isCurrent
+                                ? "bg-amber-50/80 border-amber-300 shadow-xs"
+                                : "bg-sky-50/40 border-sky-100"
+                          }`}
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                            <span
+                              className={`text-xs sm:text-sm font-black ${
+                                isExpired ? "line-through text-slate-400" : "text-sky-950"
+                              }`}
+                            >
+                              Do {formatDatePL(prog.data_do)}
+                            </span>
+                            <span
+                              className={`text-xs font-bold ${
+                                isExpired ? "line-through text-slate-400" : "text-slate-600"
+                              }`}
+                            >
+                              • Liczba miejsc: <strong className={isExpired ? "font-bold" : "text-sky-950"}>{prog.liczba_miejsc}</strong>
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between sm:justify-end gap-3">
+                            {isExpired ? (
+                              <>
+                                <span className="line-through font-black text-slate-400 text-sm sm:text-base">
+                                  {prog.cena}
+                                </span>
+                                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-200 text-slate-600">
+                                  Termin minął
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                {activeDiscountDetails && progDiscounted?.discountAmount && progDiscounted.discountAmount > 0 && !isAdmin ? (
+                                  <div className="flex items-baseline gap-1.5">
+                                    <span className="line-through text-slate-400 text-xs font-bold">{prog.cena}</span>
+                                    <span className="font-black text-emerald-600 text-sm sm:text-base">{progDiscounted.finalPriceStr}</span>
+                                  </div>
+                                ) : (
+                                  <span className="font-black text-sky-950 text-sm sm:text-base">
+                                    {prog.cena}
+                                  </span>
+                                )}
+                                {isCurrent ? (
+                                  <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    Aktualna pula
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-sky-100 text-sky-800">
+                                    Kolejny próg
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="bg-amber-50/70 border border-amber-200/80 p-3.5 rounded-xl text-xs text-amber-950 font-bold flex items-start gap-2.5">
+                    <span className="text-base leading-none shrink-0">ℹ️</span>
+                    <span>
+                      O zapisie na wydarzenie oraz przypisaniu do danej puli cenowej decyduje kolejność wpłaty zadatku.
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Opis ogólny */}
               <div className="bg-white p-5 sm:p-8 rounded-2xl sm:rounded-3xl shadow-sm border border-slate-200">
@@ -1801,7 +2042,6 @@ export default function WydarzeniaPage() {
                           )}
                         </div>
                       )}
-
                       {selectedEvent?.koszulki_opis && (
                         <div className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed bg-slate-50 p-4 rounded-2xl border border-slate-100 font-medium break-words">
                           {selectedEvent.koszulki_opis}
@@ -2119,6 +2359,102 @@ export default function WydarzeniaPage() {
                 </div>
               </div>
 
+              {/* SYSTEM ZACHĘCAJĄCY - PROGI CENOWE (EARLY BIRD) */}
+              <div className="p-4 sm:p-5 bg-amber-50/70 rounded-2xl border border-amber-200 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <label className="font-black text-amber-950 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                      <span>🏷️</span> System zachęcający — Pule cenowe (opcjonalnie)
+                    </label>
+                    <p className="text-[11px] text-amber-900/80 font-medium mt-0.5">
+                      Dodaj progi czasowe z limitem miejsc (np. do końca stycznia 1000 zł / 5 miejsc, do końca lutego 1100 zł / 5 miejsc). Po minięciu daty próg automatycznie się przekreśli.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddProgCenowy}
+                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-3.5 py-2 rounded-xl text-xs transition-colors cursor-pointer shrink-0 shadow-xs"
+                  >
+                    + Dodaj próg cenowy
+                  </button>
+                </div>
+
+                {form.progi_cenowe.length > 0 && (
+                  <div className="space-y-2.5">
+                    {form.progi_cenowe.map((prog, idx) => {
+                      const isProgPast = prog.data_do && prog.data_do < dzisiajStr;
+                      return (
+                        <div
+                          key={prog.id || idx}
+                          className={`p-3 rounded-xl border grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end ${
+                            isProgPast ? "bg-slate-50 border-slate-200 opacity-75" : "bg-white border-amber-200"
+                          }`}
+                        >
+                          <div className="sm:col-span-4 space-y-1">
+                            <label className="font-bold text-slate-600 text-[10px] block uppercase">
+                              Obowiązuje do {isProgPast && <span className="text-rose-600">(minął)</span>}
+                            </label>
+                            <input
+                              type="date"
+                              required
+                              value={prog.data_do}
+                              onChange={(e) => handleUpdateProgCenowy(idx, "data_do", e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-4 space-y-1">
+                            <label className="font-bold text-slate-600 text-[10px] block uppercase">
+                              Cena wydarzenia
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={prog.cena}
+                              onChange={(e) => handleUpdateProgCenowy(idx, "cena", e.target.value)}
+                              placeholder="np. 1000 PLN"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-3 space-y-1">
+                            <label className="font-bold text-slate-600 text-[10px] block uppercase">
+                              Liczba miejsc
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              required
+                              value={prog.liczba_miejsc}
+                              onChange={(e) => handleUpdateProgCenowy(idx, "liczba_miejsc", parseInt(e.target.value, 10) || 0)}
+                              placeholder="np. 5"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-1 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveProgCenowy(idx)}
+                              className="text-rose-500 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-xl px-2.5 py-2 text-xs font-black cursor-pointer transition-colors"
+                              title="Usuń próg cenowy"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    <div className="text-[11px] text-amber-900 font-bold bg-white/80 border border-amber-200/80 px-3 py-2 rounded-xl flex items-center gap-2">
+                      <span>ℹ️</span>
+                      <span>Klubowiczom wyświetli się informacja, że o zapisach i cenie decyduje kolejność wpłaty zadatku.</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* OPIS OGÓLNY */}
               <div className="space-y-1">
                 <label className="font-bold text-slate-700 text-xs block uppercase">Opis ogólny wydarzenia (publiczny)</label>
@@ -2353,7 +2689,7 @@ export default function WydarzeniaPage() {
                       <textarea 
                         value={form.ekwipunek} 
                         onChange={(e) => setForm({...form, ekwipunek: e.target.value})} 
-                        placeholder="- Buty do biegania w terenie&#10;- Strój kąpielowy i klapki&#10;- Wygodny strój sportowy" 
+                        placeholder="- Buty do biegania w terenie&#10;- Strój kąpielowy i klapki&#10;- Wygodny strój sportowy"
                         rows={3} 
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:border-amber-500 resize-none" 
                       />
