@@ -596,6 +596,15 @@ const isPromoOrCodeTransaction = (t: any, kwotaTransakcji: number, katalogKarnet
   return false;
 };
 
+// MAPOWANIE PROGU RABATU (%) NA ODPOWIADAJĄCĄ MU LICZBĘ KWALIFIKOWANYCH ZAKUPÓW (0%->0, 2%->1, 4%->2, 5%->3 ... 25%->23)
+const discountPercentToVirtualCount = (percent: number): number => {
+  const clean = Math.max(0, Math.min(25, Math.round(percent)));
+  if (clean <= 0) return 0;
+  if (clean <= 2) return 1;
+  if (clean === 3) return 2;
+  return clean - 2;
+};
+
 export default function KlienciPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -791,23 +800,12 @@ export default function KlienciPage() {
     });
   };
 
-  // NALICZANIE CIĄGŁOŚCI: SZTYWNE PROGI 2% -> 4% -> +1% DO MAX 25%
-  const calculateStandardSystemDiscount = (client: any, katalogList: any[] = dostepneKarnety) => {
+  // LICZENIE BAZOWEJ LICZBY KWALIFIKOWANYCH ZAKUPÓW (Z FALLBACKIEM DLA AKTYWNEGO KARNETU)
+  const getBaseContinuityPurchaseCount = (client: any, katalogList: any[] = dostepneKarnety): number => {
     if (!client) return 0;
-
-    // 1. Nadrzędność rabatu stałego: jeśli klient ma rabat stały, rabat za ciągłość wynosi 0%
-    const stalyRabat = parseFloat(String(client.discount || '0').replace(/[^0-9.]/g, '')) || 0;
-    if (stalyRabat > 0) return 0;
-
-    // 2. Jeśli utracono ciągłość
-    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') {
-      return 0;
-    }
-
     const transakcjeKarnetow = getQualifiedContinuityTransactions(client, katalogList);
     let count = transakcjeKarnetow.length;
 
-    // Fallback: jeśli w transakcjach nic jeszcze nie ma, ale klient ma w tablicy aktywny kwalifikowany karnet standardowy > 150 zł (bez promocji, umowy i medicover)
     if (count === 0 && Array.isArray(client.karnetyKlubowicza) && client.karnetyKlubowicza.length > 0) {
       const activeEligible = client.karnetyKlubowicza.some((k: any) => {
         if (isContractPassCheck(k)) return false;
@@ -830,10 +828,29 @@ export default function KlienciPage() {
       if (activeEligible) count = 1;
     }
 
-    if (count <= 0) return 0;
-    if (count === 1) return 2;
-    if (count === 2) return 4;
-    return Math.min(25, 4 + (count - 2));
+    return count;
+  };
+
+  // NALICZANIE CIĄGŁOŚCI: SZTYWNE PROGI 2% -> 4% -> +1% DO MAX 25% (Z UWZGLĘDNIENIEM KOREKTY LICZNIKA Z OŁÓWKA)
+  const calculateStandardSystemDiscount = (client: any, katalogList: any[] = dostepneKarnety, countOffset: number = 0) => {
+    if (!client) return 0;
+
+    // 1. Nadrzędność rabatu stałego: jeśli klient ma rabat stały, rabat za ciągłość wynosi 0%
+    const stalyRabat = parseFloat(String(client.discount || '0').replace(/[^0-9.]/g, '')) || 0;
+    if (stalyRabat > 0) return 0;
+
+    // 2. Jeśli utracono ciągłość
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') {
+      return 0;
+    }
+
+    const baseCount = getBaseContinuityPurchaseCount(client, katalogList);
+    const effectiveCount = Math.max(0, baseCount + Math.trunc(countOffset));
+
+    if (effectiveCount <= 0) return 0;
+    if (effectiveCount === 1) return 2;
+    if (effectiveCount === 2) return 4;
+    return Math.min(25, 4 + (effectiveCount - 2));
   };
 
   const calculateSystemDiscount = (client: any, katalogList: any[] = dostepneKarnety) => {
@@ -847,12 +864,8 @@ export default function KlienciPage() {
       return 0;
     }
 
-    const std = calculateStandardSystemDiscount(client, katalogList);
-    // Uwzględniamy wyłącznie dodatni offset nadany ręcznie przez admina w panelu (nigdy ujemny offset powodujący 1% lub 3%)
-    const rawOffset = parseFloat(client.systemDiscountOffset || client.system_discount_offset || '0') || 0;
-    const positiveOffset = rawOffset > 0 ? rawOffset : 0;
-
-    return Math.max(0, Math.min(25, std + positiveOffset));
+    const countOffset = Math.trunc(parseFloat(String(client.systemDiscountOffset ?? client.system_discount_offset ?? '0')) || 0);
+    return calculateStandardSystemDiscount(client, katalogList, countOffset);
   };
 
   const getEffectiveDiscount = (client: any, isContract: boolean = false, basePriceToCheck?: number, passNameToCheck?: string) => {
@@ -1519,11 +1532,7 @@ export default function KlienciPage() {
         }
 
         let currentDiscount = c.discount;
-        const rawStoredOffset = parseFloat(c.systemDiscountOffset || c.system_discount_offset || '0') || 0;
-        let currentOffset = rawStoredOffset > 0 ? rawStoredOffset : 0;
-        if (rawStoredOffset < 0) {
-          hasChanges = true;
-        }
+        let currentOffset = Math.trunc(parseFloat(String(c.systemDiscountOffset ?? c.system_discount_offset ?? '0')) || 0);
         let hasLostContinuity = continuityBroken || c.hasLostContinuity === true || c.hasLostContinuity === 'true' || c.has_lost_continuity === true || c.has_lost_continuity === 'true';
         let currentRabat = c.rabat !== undefined ? c.rabat : null;
 
@@ -1578,7 +1587,7 @@ export default function KlienciPage() {
             hasChanges = true;
           }
         } else if (finalKarnety.length > 0 && hasLostContinuity && !continuityBroken && lastPassPurchaseTime > lastUtrataTime) {
-          // Klient po wcześniejszej utracie ciągłości wykupił nowy karnet - przywracamy naliczanie ciągłości od zera
+          // Klient po wcześniejszej utracie ciągłości wykupił nowy karnet - przywracamy naliczanie ciągłości czysto od zera
           hasLostContinuity = false;
           currentOffset = 0;
           hasChanges = true;
@@ -1753,32 +1762,37 @@ export default function KlienciPage() {
 
   const handleSaveSystemDiscount = async () => {
     if (!profileClient) return;
-    const targetVal = Math.max(0, Math.min(25, parseFloat(systemDiscountInput) || 0));
-    
+    const rawInput = Math.max(0, Math.min(25, Math.round(parseFloat(systemDiscountInput) || 0)));
+    const targetVirtualCount = discountPercentToVirtualCount(rawInput);
+    const normalizedTargetPercent = targetVirtualCount === 0
+      ? 0
+      : targetVirtualCount === 1
+      ? 2
+      : Math.min(25, 4 + (targetVirtualCount - 2));
+
     const fakeClient = { ...profileClient };
     fakeClient.hasLostContinuity = false;
     fakeClient.has_lost_continuity = false;
     fakeClient.discount = '';
-    const std = calculateStandardSystemDiscount(fakeClient, dostepneKarnety);
-    
-    const newOffset = targetVal > std ? (targetVal - std) : 0;
-    const shouldMarkLost = targetVal === 0;
+    const baseCount = getBaseContinuityPurchaseCount(fakeClient, dostepneKarnety);
+
+    const newCountOffset = targetVirtualCount - baseCount;
 
     const updatedClient = { 
         ...profileClient, 
-        rabat: targetVal, 
-        systemDiscountOffset: newOffset, 
-        hasLostContinuity: shouldMarkLost,
-        has_lost_continuity: shouldMarkLost
+        rabat: normalizedTargetPercent, 
+        systemDiscountOffset: newCountOffset, 
+        hasLostContinuity: false,
+        has_lost_continuity: false
     };
     
     const { error } = await supabase.from('klienci').update({ 
-        rabat: targetVal, 
-        rabat_za_ciaglosc: `${targetVal}%`,
-        'Rabat za ciągłość': `${targetVal}%`,
-        system_discount_offset: newOffset, 
-        hasLostContinuity: shouldMarkLost,
-        has_lost_continuity: shouldMarkLost
+        rabat: normalizedTargetPercent, 
+        rabat_za_ciaglosc: `${normalizedTargetPercent}%`,
+        'Rabat za ciągłość': `${normalizedTargetPercent}%`,
+        system_discount_offset: newCountOffset, 
+        hasLostContinuity: false,
+        has_lost_continuity: false
     }).eq('id', profileClient.id);
     
     if (error) {
@@ -2287,9 +2301,11 @@ export default function KlienciPage() {
       };
 
       if (!isContract && kwotaKarnetu > 150 && !isMedicover && !isPromoCustomPrice) {
-        updatePayload.hasLostContinuity = false;
-        updatePayload.has_lost_continuity = false;
-        updatePayload.system_discount_offset = 0;
+        if (profileClient.hasLostContinuity || profileClient.has_lost_continuity) {
+          updatePayload.hasLostContinuity = false;
+          updatePayload.has_lost_continuity = false;
+          updatePayload.system_discount_offset = 0;
+        }
       }
 
       if (isContract) {
@@ -2458,9 +2474,11 @@ export default function KlienciPage() {
       };
 
       if (!isContract && kwotaKarnetu > 150 && !isMedicover) {
-        updatePayload.hasLostContinuity = false;
-        updatePayload.has_lost_continuity = false;
-        updatePayload.system_discount_offset = 0;
+        if (profileClient.hasLostContinuity || profileClient.has_lost_continuity) {
+          updatePayload.hasLostContinuity = false;
+          updatePayload.has_lost_continuity = false;
+          updatePayload.system_discount_offset = 0;
+        }
       }
 
       if (isContract) {
