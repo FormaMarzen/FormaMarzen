@@ -26,6 +26,23 @@ function isContractPass(k: any): boolean {
   return typ.includes('umowa') || lower.includes('umowa') || lower.includes('12m') || typ.includes('12m') || typ.includes('12 miesięcy');
 }
 
+// NORMALIZACJA PROGÓW CIĄGŁOŚCI DO SZTYWNYCH ZASAD: 0% -> 2% -> 4% -> +1% DO MAX 25% (BEZ 1% I 3%)
+function resolveValidContinuityStep(currentRabat: number, proposedRabat: number): number {
+  const cleanCurrent = Math.max(0, Math.min(25, Math.round(currentRabat || 0)));
+  const cleanProposed = Math.round(proposedRabat || 0);
+
+  if (cleanProposed <= 0) return 0;
+  if (cleanProposed === 1) {
+    if (cleanCurrent <= 0) return 2;
+    if (cleanCurrent === 2) return 4;
+    return Math.min(25, cleanCurrent + 1);
+  }
+  if (cleanProposed === 3) {
+    return 4;
+  }
+  return Math.max(2, Math.min(25, cleanProposed));
+}
+
 // DYNAMICZNY KALKULATOR KOLEJNEJ RATY Z ZACHOWANIEM ANEKSÓW / SKRÓCONYCH UMÓW (NP. 8 / 10 ZAMIAST 1 / 12)
 function calculateNextRata(currentRataStr?: string | null, fallbackMax: number = 12): { nextRata: number; maxRata: number; rataDisplay: string } {
   let currentRataNum = 0;
@@ -799,8 +816,29 @@ export async function POST(req: Request) {
           }
           const existingContract = existingKarnety.find(isContractPass);
 
-          // WYKLUCZENIE Z CIĄGŁOŚCI KARNETÓW <= 150 ZŁ
-          const isLowCostPass = transactionAmount <= 150;
+          // Rozbicie płatności: AutoPay, Portfel, Kod rabatowy (pobieramy wcześnie do weryfikacji ciągłości)
+          const walletDeduction = Number(metadata.walletDeduction || metadata.kwota_portfel || metadata.portfel) || 0;
+          const discountCode = metadata.kod_rabatowy || metadata.kodRabatowy || metadata.discountCode || null;
+          const discountAmount = Number(metadata.rabat_kwota || metadata.rabatKwota || metadata.discountAmount) || 0;
+          const totalPaidAmount = transactionAmount + walletDeduction;
+
+          const passTitle = metadata.passName || metadata.nazwaKarnetu || metadata.karnetNazwa || '';
+
+          let effectivePassValue = totalPaidAmount;
+          if (metadata.cenaStr) {
+            const parsedCena = parseFloat(String(metadata.cenaStr).replace(/[^0-9.-]/g, ''));
+            if (!isNaN(parsedCena) && parsedCena > 0) {
+              effectivePassValue = parsedCena;
+            }
+          }
+
+          // WYKLUCZENIE Z CIĄGŁOŚCI KARNETÓW <= 150 ZŁ (LICZONE OD PEŁNEJ WARTOŚCI KARNETU)
+          const isLowCostPass = effectivePassValue <= 150;
+          const hasPromoCodeUsed = Boolean(
+            (discountCode && String(discountCode).trim() !== '') ||
+            discountAmount > 0 ||
+            metadata.appliedDiscountCodeId
+          );
 
           if (metadata.updatedKarnetyList && Array.isArray(metadata.updatedKarnetyList)) {
             clientUpdatePayload.karnetyKlubowicza = metadata.updatedKarnetyList.map((k: any) => {
@@ -849,28 +887,6 @@ export async function POST(req: Request) {
             clientUpdatePayload.urodziny_rabat_rok = metadata.urodziny_rabat_rok;
           }
 
-          // Rabat i cykl ciągłości aktualizujemy tylko dla karnetów powyżej 150 zł
-          if (!isLowCostPass) {
-            if (metadata.finalRabatInt !== undefined) {
-              clientUpdatePayload.rabat = metadata.finalRabatInt;
-            }
-            if (metadata.finalCyklInt !== undefined) {
-              clientUpdatePayload.cyklCiaglosci = metadata.finalCyklInt;
-            }
-            if (metadata.hasLostContinuity !== undefined) {
-              clientUpdatePayload.hasLostContinuity = metadata.hasLostContinuity;
-            }
-          }
-
-          // PROGRAM AMBASADOR: Zapis jednorazowo skonsumowanego progu Ambasadora
-          if (metadata.ambassador_claimed_tier_id) {
-            clientUpdatePayload.ambassador_claimed_tier_id = metadata.ambassador_claimed_tier_id;
-          }
-
-          if (metadata.cenaStr) {
-            clientUpdatePayload.Cena = metadata.cenaStr;
-          }
-
           let isContractOperation = false;
           if (metadata.umowa_oplacona_do) {
             clientUpdatePayload.umowa_oplacona_do = metadata.umowa_oplacona_do;
@@ -881,6 +897,46 @@ export async function POST(req: Request) {
               isContractOperation = true;
               clientUpdatePayload.umowa_oplacona_do = contractItem.waznyDo || calculateEndOfMonthDate(klient.umowa_oplacona_do);
             }
+          } else if (passTitle.toLowerCase().includes('umowa') || passTitle.toLowerCase().includes('12m')) {
+            isContractOperation = true;
+          }
+
+          const isMedicoverPass =
+            passTitle.toLowerCase().includes('medicover') ||
+            (Array.isArray(clientUpdatePayload.karnetyKlubowicza) &&
+              clientUpdatePayload.karnetyKlubowicza.some((k: any) => String(k.nazwa || '').toLowerCase().includes('medicover')));
+
+          const stalyRabat = parseFloat(String(klient.discount || '0').replace(/[^0-9.]/g, '')) || 0;
+
+          // Rabat i cykl ciągłości aktualizujemy TYLKO dla pełnopłatnych karnetów > 150 zł (bez kodu rabatowego, umowy 12M i Medicover)
+          if (stalyRabat > 0) {
+            clientUpdatePayload.rabat = 0;
+            clientUpdatePayload.rabat_za_ciaglosc = '0%';
+            clientUpdatePayload['Rabat za ciągłość'] = '0%';
+          } else if (!isLowCostPass && !hasPromoCodeUsed && !isContractOperation && !isMedicoverPass) {
+            if (metadata.finalRabatInt !== undefined) {
+              const currentClientRabat = Number(klient.rabat) || 0;
+              const validRabat = resolveValidContinuityStep(currentClientRabat, Number(metadata.finalRabatInt));
+              clientUpdatePayload.rabat = validRabat;
+              clientUpdatePayload.rabat_za_ciaglosc = `${validRabat}%`;
+              clientUpdatePayload['Rabat za ciągłość'] = `${validRabat}%`;
+            }
+            if (metadata.finalCyklInt !== undefined) {
+              clientUpdatePayload.cyklCiaglosci = metadata.finalCyklInt;
+            }
+            if (metadata.hasLostContinuity !== undefined) {
+              clientUpdatePayload.hasLostContinuity = false;
+              clientUpdatePayload.has_lost_continuity = false;
+            }
+          }
+
+          // PROGRAM AMBASADOR: Zapis jednorazowo skonsumowanego progu Ambasadora
+          if (metadata.ambassador_claimed_tier_id) {
+            clientUpdatePayload.ambassador_claimed_tier_id = metadata.ambassador_claimed_tier_id;
+          }
+
+          if (metadata.cenaStr) {
+            clientUpdatePayload.Cena = metadata.cenaStr;
           }
 
           if (isContractOperation) {
@@ -902,7 +958,6 @@ export async function POST(req: Request) {
               .eq('id', klient.id);
           }
 
-          const passTitle = metadata.passName || metadata.nazwaKarnetu || metadata.karnetNazwa || '';
           let opDescription = transakcja.gateway_response?.opis || (transakcja.type === 'pass_extend' ? 'Przedłużenie karnetu' : 'Zakup karnetu');
           
           if (passTitle && !opDescription.includes(passTitle)) {
@@ -912,12 +967,6 @@ export async function POST(req: Request) {
           if (metadata.transferredEntries && metadata.transferredEntries > 0) {
             opDescription += ` (Przeniesiono +${metadata.transferredEntries} niewykorzystanych wejść)`;
           }
-
-          // Rozbicie płatności: AutoPay, Portfel, Kod rabatowy
-          const walletDeduction = Number(metadata.walletDeduction || metadata.kwota_portfel || metadata.portfel) || 0;
-          const discountCode = metadata.kod_rabatowy || metadata.kodRabatowy || metadata.discountCode || null;
-          const discountAmount = Number(metadata.rabat_kwota || metadata.rabatKwota || metadata.discountAmount) || 0;
-          const totalPaidAmount = transactionAmount + walletDeduction;
 
           let paymentDetailsDesc = `AutoPay: ${transactionAmount.toFixed(2)} PLN`;
           if (walletDeduction > 0) {
