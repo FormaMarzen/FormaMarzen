@@ -911,22 +911,16 @@ export async function POST(req: Request) {
           // Rabat i cykl ciągłości aktualizujemy TYLKO dla pełnopłatnych karnetów > 150 zł (bez kodu rabatowego, umowy 12M i Medicover)
           if (stalyRabat > 0) {
             clientUpdatePayload.rabat = 0;
-            clientUpdatePayload.rabat_za_ciaglosc = '0%';
-            clientUpdatePayload['Rabat za ciągłość'] = '0%';
           } else if (!isLowCostPass && !hasPromoCodeUsed && !isContractOperation && !isMedicoverPass) {
             if (metadata.finalRabatInt !== undefined) {
               const currentClientRabat = Number(klient.rabat) || 0;
-              const validRabat = resolveValidContinuityStep(currentClientRabat, Number(metadata.finalRabatInt));
-              clientUpdatePayload.rabat = validRabat;
-              clientUpdatePayload.rabat_za_ciaglosc = `${validRabat}%`;
-              clientUpdatePayload['Rabat za ciągłość'] = `${validRabat}%`;
+              clientUpdatePayload.rabat = resolveValidContinuityStep(currentClientRabat, Number(metadata.finalRabatInt));
             }
             if (metadata.finalCyklInt !== undefined) {
               clientUpdatePayload.cyklCiaglosci = metadata.finalCyklInt;
             }
             if (metadata.hasLostContinuity !== undefined) {
               clientUpdatePayload.hasLostContinuity = false;
-              clientUpdatePayload.has_lost_continuity = false;
             }
           }
 
