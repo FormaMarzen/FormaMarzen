@@ -1620,8 +1620,6 @@ export default function KlienciPage() {
                Cena: cenaAktywnegoKarnetu,
                discount: currentDiscount,
                rabat: currentRabat,
-               rabat_za_ciaglosc: `${expectedSysRabat}%`,
-               'Rabat za ciągłość': `${expectedSysRabat}%`,
                system_discount_offset: currentOffset,
                hasLostContinuity: hasLostContinuity,
                has_lost_continuity: hasLostContinuity,
@@ -1788,8 +1786,6 @@ export default function KlienciPage() {
     
     const { error } = await supabase.from('klienci').update({ 
         rabat: normalizedTargetPercent, 
-        rabat_za_ciaglosc: `${normalizedTargetPercent}%`,
-        'Rabat za ciągłość': `${normalizedTargetPercent}%`,
         system_discount_offset: newCountOffset, 
         hasLostContinuity: false,
         has_lost_continuity: false
@@ -1967,8 +1963,6 @@ export default function KlienciPage() {
         karnetyKlubowicza: poczatkoweKarnety,
         umowa_oplacona_do: initialUmowaOplaconaDo,
         rabat: startContinuityDiscount,
-        rabat_za_ciaglosc: `${startContinuityDiscount}%`,
-        'Rabat za ciągłość': `${startContinuityDiscount}%`,
         system_discount_offset: 0,
         hasLostContinuity: !qualifiesForStartContinuity,
         has_lost_continuity: !qualifiesForStartContinuity
