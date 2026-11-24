@@ -1290,6 +1290,7 @@ export default function KlienciPage() {
         });
       }
       const enrichedPromises = klienciData.map(async (c: any) => {
+        const rawKeys = Object.keys(c);
         const clientTransakcje = transakcjeData ? transakcjeData.filter((t: any) => String(t.klient_id) === String(c.id)) : [];
         const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
         const futureBookingDates = clientFutureBookingDatesMap.get(Number(c.id)) || [];
@@ -1586,11 +1587,26 @@ export default function KlienciPage() {
             currentOffset = 0;
             hasChanges = true;
           }
-        } else if (finalKarnety.length > 0 && hasLostContinuity && !continuityBroken && lastPassPurchaseTime > lastUtrataTime) {
-          // Klient po wcześniejszej utracie ciągłości wykupił nowy karnet - przywracamy naliczanie ciągłości czysto od zera
+        } else if (finalKarnety.length > 0 && hasLostContinuity && !continuityBroken && (lastPassPurchaseTime > lastUtrataTime || lastUtrataTime === 0)) {
+          // Klient posiada aktywny karnet i nie ma aktywnej utraty ciągłości
           hasLostContinuity = false;
-          currentOffset = 0;
+          if (currentOffset < 0) currentOffset = 0;
           hasChanges = true;
+        }
+
+        // Ochrona przed starym ujemnym offsetem, który zerowałby rabat mimo aktywnego rabatu > 0 w bazie
+        if (currentOffset < 0 && Number(c.rabat || 0) > 0) {
+          const baseCheck = getBaseContinuityPurchaseCount({
+            ...c,
+            discount: currentDiscount,
+            hasLostContinuity: false,
+            karnetyKlubowicza: finalKarnety,
+            transakcje: clientTransakcje
+          }, ustrukturyzowaneKarnety);
+          if (baseCheck + currentOffset <= 0) {
+            currentOffset = 0;
+            hasChanges = true;
+          }
         }
 
         // PRZELICZENIE I SYNCHRONIZACJA POPRAWNEGO PROGU CIĄGŁOŚCI (0% -> 2% -> 4% -> +1% DO MAX 25%)
@@ -1619,16 +1635,32 @@ export default function KlienciPage() {
                Wygasa: calculatedExpiry,
                Cena: cenaAktywnegoKarnetu,
                discount: currentDiscount,
-               rabat: currentRabat,
-               system_discount_offset: currentOffset,
-               hasLostContinuity: hasLostContinuity,
-               has_lost_continuity: hasLostContinuity,
-               continuityBreakNotice: continuityNotice
+               rabat: currentRabat
            };
+
+           if (rawKeys.includes('system_discount_offset')) {
+             updatePayload.system_discount_offset = currentOffset;
+           }
+           if (rawKeys.includes('systemDiscountOffset')) {
+             updatePayload.systemDiscountOffset = currentOffset;
+           }
+           if (rawKeys.includes('hasLostContinuity')) {
+             updatePayload.hasLostContinuity = hasLostContinuity;
+           }
+           if (rawKeys.includes('has_lost_continuity')) {
+             updatePayload.has_lost_continuity = hasLostContinuity;
+           }
+           if (rawKeys.includes('continuityBreakNotice')) {
+             updatePayload.continuityBreakNotice = continuityNotice;
+           } else if (rawKeys.includes('continuity_break_notice')) {
+             updatePayload.continuity_break_notice = continuityNotice;
+           }
 
            if (walletChanged) {
              updatePayload.Portfel = `${currentWalletNum.toFixed(2)} PLN`;
-             updatePayload.portfel = currentWalletNum;
+             if (rawKeys.includes('portfel')) {
+               updatePayload.portfel = currentWalletNum;
+             }
            }
 
            await supabase.from('klienci').update(updatePayload).eq('id', c.id);
@@ -1644,7 +1676,7 @@ export default function KlienciPage() {
 
         return {
           ...c,
-          _rawKeys: Object.keys(c),
+          _rawKeys: rawKeys,
           id: c.id,
           camp_discount_type: c.camp_discount_type || null,
           camp_discount_amount: c.camp_discount_amount !== null && c.camp_discount_amount !== undefined ? Number(c.camp_discount_amount) : null,
@@ -1775,21 +1807,35 @@ export default function KlienciPage() {
     const baseCount = getBaseContinuityPurchaseCount(fakeClient, dostepneKarnety);
 
     const newCountOffset = targetVirtualCount - baseCount;
+    const rawKeys: string[] = profileClient._rawKeys || [];
+
+    const updatePayload: Record<string, any> = {
+      rabat: normalizedTargetPercent
+    };
+
+    if (rawKeys.length === 0 || rawKeys.includes('system_discount_offset')) {
+      updatePayload.system_discount_offset = newCountOffset;
+    }
+    if (rawKeys.includes('systemDiscountOffset')) {
+      updatePayload.systemDiscountOffset = newCountOffset;
+    }
+    if (rawKeys.length === 0 || rawKeys.includes('hasLostContinuity')) {
+      updatePayload.hasLostContinuity = false;
+    }
+    if (rawKeys.includes('has_lost_continuity')) {
+      updatePayload.has_lost_continuity = false;
+    }
 
     const updatedClient = { 
         ...profileClient, 
         rabat: normalizedTargetPercent, 
         systemDiscountOffset: newCountOffset, 
+        system_discount_offset: newCountOffset,
         hasLostContinuity: false,
         has_lost_continuity: false
     };
     
-    const { error } = await supabase.from('klienci').update({ 
-        rabat: normalizedTargetPercent, 
-        system_discount_offset: newCountOffset, 
-        hasLostContinuity: false,
-        has_lost_continuity: false
-    }).eq('id', profileClient.id);
+    const { error } = await supabase.from('klienci').update(updatePayload).eq('id', profileClient.id);
     
     if (error) {
       alert(`Błąd zapisu rabatu za ciągłość: ${error.message}`);
@@ -1949,6 +1995,7 @@ export default function KlienciPage() {
       const qualifiesForStartContinuity = Boolean(newClient.selectedPass && !isContract && !isMedicoverNew && cenaWartosc > 150);
       const startContinuityDiscount = qualifiesForStartContinuity ? 2 : 0;
 
+      const sampleKeys: string[] = clients[0]?._rawKeys || [];
       const insertPayload: any = {
         id: newClientId,
         Imię: newClient.firstName,
@@ -1958,15 +2005,17 @@ export default function KlienciPage() {
         Cena: cenaKarnetu,
         Wygasa: dataWygasnieciaStr,
         Portfel: poczatkowyStanStr,
-        portfel: poczatkowyStan,
         Zarejestrowany: newClient.registered,
         karnetyKlubowicza: poczatkoweKarnety,
         umowa_oplacona_do: initialUmowaOplaconaDo,
-        rabat: startContinuityDiscount,
-        system_discount_offset: 0,
-        hasLostContinuity: !qualifiesForStartContinuity,
-        has_lost_continuity: !qualifiesForStartContinuity
+        rabat: startContinuityDiscount
       };
+
+      if (sampleKeys.length === 0 || sampleKeys.includes('portfel')) insertPayload.portfel = poczatkowyStan;
+      if (sampleKeys.length === 0 || sampleKeys.includes('system_discount_offset')) insertPayload.system_discount_offset = 0;
+      if (sampleKeys.includes('systemDiscountOffset')) insertPayload.systemDiscountOffset = 0;
+      if (sampleKeys.length === 0 || sampleKeys.includes('hasLostContinuity')) insertPayload.hasLostContinuity = !qualifiesForStartContinuity;
+      if (sampleKeys.includes('has_lost_continuity')) insertPayload.has_lost_continuity = !qualifiesForStartContinuity;
 
       const { error } = await supabase.from('klienci').insert([insertPayload]);
 
@@ -2285,20 +2334,25 @@ export default function KlienciPage() {
       });
 
       const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+      const rawKeys: string[] = profileClient._rawKeys || [];
 
       const updatePayload: any = {
         karnetyKlubowicza: uaktualnioneKarnety,
         Wygasa: latestExpiry,
         Cena: nowaCena,
-        Portfel: nowyStanStr,
-        portfel: parseFloat(String(nowyStanStr).replace(/[^0-9.-]/g, '')) || 0
+        Portfel: nowyStanStr
       };
+
+      if (rawKeys.length === 0 || rawKeys.includes('portfel')) {
+        updatePayload.portfel = parseFloat(String(nowyStanStr).replace(/[^0-9.-]/g, '')) || 0;
+      }
 
       if (!isContract && kwotaKarnetu > 150 && !isMedicover && !isPromoCustomPrice) {
         if (profileClient.hasLostContinuity || profileClient.has_lost_continuity) {
-          updatePayload.hasLostContinuity = false;
-          updatePayload.has_lost_continuity = false;
-          updatePayload.system_discount_offset = 0;
+          if (rawKeys.length === 0 || rawKeys.includes('hasLostContinuity')) updatePayload.hasLostContinuity = false;
+          if (rawKeys.includes('has_lost_continuity')) updatePayload.has_lost_continuity = false;
+          if (rawKeys.length === 0 || rawKeys.includes('system_discount_offset')) updatePayload.system_discount_offset = 0;
+          if (rawKeys.includes('systemDiscountOffset')) updatePayload.systemDiscountOffset = 0;
         }
       }
 
@@ -2458,20 +2512,25 @@ export default function KlienciPage() {
       const stareKarnety = safeJsonParse(profileClient.karnetyKlubowicza, []);
       const uaktualnioneKarnety = [...stareKarnety, nowyKarnetObj];
       const latestExpiry = getLatestPassExpiry(uaktualnioneKarnety);
+      const rawKeys: string[] = profileClient._rawKeys || [];
 
       const updatePayload: any = {
         karnetyKlubowicza: uaktualnioneKarnety,
         Wygasa: latestExpiry,
         Cena: cenaObjKarnetu,
-        Portfel: nowyStanStr,
-        portfel: parseFloat(String(nowyStanStr).replace(/[^0-9.-]/g, '')) || 0
+        Portfel: nowyStanStr
       };
+
+      if (rawKeys.length === 0 || rawKeys.includes('portfel')) {
+        updatePayload.portfel = parseFloat(String(nowyStanStr).replace(/[^0-9.-]/g, '')) || 0;
+      }
 
       if (!isContract && kwotaKarnetu > 150 && !isMedicover) {
         if (profileClient.hasLostContinuity || profileClient.has_lost_continuity) {
-          updatePayload.hasLostContinuity = false;
-          updatePayload.has_lost_continuity = false;
-          updatePayload.system_discount_offset = 0;
+          if (rawKeys.length === 0 || rawKeys.includes('hasLostContinuity')) updatePayload.hasLostContinuity = false;
+          if (rawKeys.includes('has_lost_continuity')) updatePayload.has_lost_continuity = false;
+          if (rawKeys.length === 0 || rawKeys.includes('system_discount_offset')) updatePayload.system_discount_offset = 0;
+          if (rawKeys.includes('systemDiscountOffset')) updatePayload.systemDiscountOffset = 0;
         }
       }
 
