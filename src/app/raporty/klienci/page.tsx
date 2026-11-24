@@ -556,6 +556,46 @@ const resolveAuthorAndMovementDetails = (
   };
 };
 
+// WERYFIKACJA CZY TRANSAKCJA BYŁA ZAKUPEM Z KODEM RABATOWYM LUB W PROMOCJI
+const isPromoOrCodeTransaction = (t: any, kwotaTransakcji: number, katalogKarnetow: any[] = []): boolean => {
+  if (!t) return false;
+  if (t.kod_rabatowy || t.promo_code || t.coupon || t.kodRabatowy || t.promoCode) return true;
+
+  const opis = String(t.opis || '').toLowerCase();
+  const promoKeywords = [
+    'kod rabatowy',
+    'kodem rabatowym',
+    'kod:',
+    'kod ',
+    'kupon',
+    'promocj',
+    'promo',
+    'zniżka promocyjna',
+    'znizka promocyjna',
+    'rabat promocyjny',
+    'black friday',
+    'voucher'
+  ];
+  if (promoKeywords.some(kw => opis.includes(kw))) return true;
+
+  // Weryfikacja czy kwota nie została obniżona kodem rabatowym względem ceny katalogowej karnetu
+  if (kwotaTransakcji > 0 && Array.isArray(katalogKarnetow) && katalogKarnetow.length > 0) {
+    const matchedDef = katalogKarnetow.find((dk: any) => {
+      const nazwaDef = String(dk.nazwa || '').toLowerCase().trim();
+      return nazwaDef.length > 2 && opis.includes(nazwaDef);
+    });
+    if (matchedDef) {
+      const cenaKat = parseFloat(String(matchedDef.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+      // Maksymalny dozwolony rabat za ciągłość to 25% (czyli cena minimalna = 75% ceny katalogowej)
+      if (cenaKat > 150 && kwotaTransakcji < (cenaKat * 0.75 - 0.5)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+};
+
 export default function KlienciPage() {
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -670,18 +710,9 @@ export default function KlienciPage() {
     return latest?.cena || '0.00 PLN';
   };
 
-  // NALICZANIE CIĄGŁOŚCI: ODPORNY FILTR Z UWZGLĘDNIENIEM WYKLUCZEŃ (UMOWY, MEDICOVER, <= 150 ZŁ, NADRZĘDNOŚĆ RABATU STAŁEGO)
-  const calculateStandardSystemDiscount = (client: any) => {
-    if (!client) return 0;
-
-    // 1. Nadrzędność rabatu stałego: jeśli klient ma rabat stały, rabat za ciągłość wynosi 0%
-    const stalyRabat = parseFloat(String(client.discount || '0').replace(/[^0-9.]/g, '')) || 0;
-    if (stalyRabat > 0) return 0;
-
-    // 2. Jeśli utracono ciągłość
-    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') {
-      return 0;
-    }
+  // ZLICZANIE KWALIFIKOWANYCH TRANSAKCJI DO CIĄGŁOŚCI OD OSTATNIEGO RESETU
+  const getQualifiedContinuityTransactions = (client: any, katalogList: any[] = dostepneKarnety) => {
+    if (!client) return [];
 
     const utraty = (client.transakcje || []).filter((t: any) => String(t.typ_operacji || '').toLowerCase() === 'utrata_ciaglosci');
     let lastResetDate = '1970-01-01T00:00:00.000Z';
@@ -690,15 +721,24 @@ export default function KlienciPage() {
       lastResetDate = utraty[0].created_at;
     }
 
-    const transakcjeKarnetow = (client.transakcje || []).filter((t: any) => {
+    return (client.transakcje || []).filter((t: any) => {
       if (new Date(t.created_at) <= new Date(lastResetDate)) return false;
 
       const typOp = String(t.typ_operacji || '').toLowerCase();
       const opis = String(t.opis || '').toLowerCase();
 
       // WYKLUCZENIA:
-      // A) Usunięcia karnetów
-      if (opis.includes('usunięcie') || opis.includes('usuniecie')) return false;
+      // A) Usunięcia, edycje, zwroty, auto-przedłużenia po wygaśnięciu
+      if (
+        opis.includes('usunięcie') ||
+        opis.includes('usuniecie') ||
+        opis.includes('anulow') ||
+        opis.includes('zwrot') ||
+        typOp === 'edycja_karnetu' ||
+        typOp === 'auto_przedluzenie_karnetu'
+      ) {
+        return false;
+      }
 
       // B) Umowy 12M i raty - NIE budują ciągłości
       if (
@@ -719,7 +759,7 @@ export default function KlienciPage() {
       // D) Wejścia pojedyncze - NIE budują ciągłości
       if (opis.includes('1 wejście') || opis.includes('1 wejscie') || opis.includes('pojedyncz')) return false;
 
-      // Kwalifikowane typy zakupów karnetów standardowych (w tym zakupy przez Autopay i pakiety wejściowe np. 10 wejść)
+      // Kwalifikowane typy zakupów karnetów standardowych
       const isPassPurchase = 
         typOp === 'zakup_karnetu' || 
         typOp === 'zakup_karnetu_autopay' || 
@@ -733,8 +773,8 @@ export default function KlienciPage() {
 
       if (!isPassPurchase) return false;
 
-      // Weryfikacja kwoty: musi być > 150 zł
-      let kwotaTransakcji = Math.abs(parseFloat(String(t.kwota || t.kwota_autopay || '0').replace(/[^0-9.-]/g, '')) || 0);
+      // Weryfikacja kwoty: musi być > 150 zł (0 zł oraz <= 150 zł są wyłączone)
+      let kwotaTransakcji = Math.abs(parseFloat(String(t.kwota ?? t.kwota_autopay ?? '0').replace(/[^0-9.-]/g, '')) || 0);
       if (kwotaTransakcji === 0 && opis.includes('pln')) {
         const matchPln = opis.match(/(\d+(?:[.,]\d+)?)\s*pln/i);
         if (matchPln) {
@@ -742,20 +782,48 @@ export default function KlienciPage() {
         }
       }
 
-      // Karnety <= 150 zł NIE kwalifikują się do ciągłości
-      if (kwotaTransakcji > 0 && kwotaTransakcji <= 150) return false;
+      if (kwotaTransakcji <= 150) return false;
+
+      // E) Zakupy z jakimkolwiek kodem rabatowym lub w promocji - NIE budują ciągłości
+      if (isPromoOrCodeTransaction(t, kwotaTransakcji, katalogList)) return false;
 
       return true;
     });
+  };
 
+  // NALICZANIE CIĄGŁOŚCI: SZTYWNE PROGI 2% -> 4% -> +1% DO MAX 25%
+  const calculateStandardSystemDiscount = (client: any, katalogList: any[] = dostepneKarnety) => {
+    if (!client) return 0;
+
+    // 1. Nadrzędność rabatu stałego: jeśli klient ma rabat stały, rabat za ciągłość wynosi 0%
+    const stalyRabat = parseFloat(String(client.discount || '0').replace(/[^0-9.]/g, '')) || 0;
+    if (stalyRabat > 0) return 0;
+
+    // 2. Jeśli utracono ciągłość
+    if (client.hasLostContinuity === true || client.hasLostContinuity === 'true' || client.has_lost_continuity === true || client.has_lost_continuity === 'true') {
+      return 0;
+    }
+
+    const transakcjeKarnetow = getQualifiedContinuityTransactions(client, katalogList);
     let count = transakcjeKarnetow.length;
 
-    // Fallback: jeśli w transakcjach nic jeszcze nie ma, ale klient ma w tablicy aktywny kwalifikowany karnet standardowy > 150 zł (i nie jest to umowa ani medicover)
+    // Fallback: jeśli w transakcjach nic jeszcze nie ma, ale klient ma w tablicy aktywny kwalifikowany karnet standardowy > 150 zł (bez promocji, umowy i medicover)
     if (count === 0 && Array.isArray(client.karnetyKlubowicza) && client.karnetyKlubowicza.length > 0) {
       const activeEligible = client.karnetyKlubowicza.some((k: any) => {
         if (isContractPassCheck(k)) return false;
         const nazwaK = String(k.nazwa || '').toLowerCase();
-        if (nazwaK.includes('medicover') || nazwaK.includes('1 wejście') || nazwaK.includes('pojedyncz')) return false;
+        const znizkaK = String(k.znizkaProcentowa || '').toLowerCase();
+        if (
+          nazwaK.includes('medicover') ||
+          nazwaK.includes('1 wejście') ||
+          nazwaK.includes('pojedyncz') ||
+          nazwaK.includes('promo') ||
+          nazwaK.includes('kod') ||
+          znizkaK.includes('kod') ||
+          znizkaK.includes('promo')
+        ) {
+          return false;
+        }
         const pCena = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
         return pCena > 150;
       });
@@ -768,7 +836,7 @@ export default function KlienciPage() {
     return Math.min(25, 4 + (count - 2));
   };
 
-  const calculateSystemDiscount = (client: any) => {
+  const calculateSystemDiscount = (client: any, katalogList: any[] = dostepneKarnety) => {
     if (!client) return 0;
 
     // Nadrzędność rabatu stałego: jeśli jest stały, ciągłość = 0%
@@ -779,15 +847,12 @@ export default function KlienciPage() {
       return 0;
     }
 
-    // Ręczne nadpisanie rabatu za ciągłość (np. ołówkiem w panelu)
-    if (client.rabat !== undefined && client.rabat !== null && client.rabat !== '') {
-      const val = parseFloat(String(client.rabat).replace(/[^0-9.-]/g, ''));
-      if (!isNaN(val) && val > 0) return val;
-    }
+    const std = calculateStandardSystemDiscount(client, katalogList);
+    // Uwzględniamy wyłącznie dodatni offset nadany ręcznie przez admina w panelu (nigdy ujemny offset powodujący 1% lub 3%)
+    const rawOffset = parseFloat(client.systemDiscountOffset || client.system_discount_offset || '0') || 0;
+    const positiveOffset = rawOffset > 0 ? rawOffset : 0;
 
-    const std = calculateStandardSystemDiscount(client);
-    const offset = parseFloat(client.systemDiscountOffset || client.system_discount_offset || '0') || 0;
-    return Math.max(0, Math.min(25, std + offset));
+    return Math.max(0, Math.min(25, std + positiveOffset));
   };
 
   const getEffectiveDiscount = (client: any, isContract: boolean = false, basePriceToCheck?: number, passNameToCheck?: string) => {
@@ -1310,7 +1375,7 @@ export default function KlienciPage() {
                   k.zeroEntriesGraceUntil = null;
                   k.statusTekst = labelWejsc;
                 }
-              } else if (hasFutureBookings) {
+              } else if (hasFutureBookings && (!k.waznyDo || k.waznyDo >= yesterdayStr)) {
                 if (k.zeroEntriesGraceUntil !== null) {
                   k.zeroEntriesGraceUntil = null;
                   karnetyZmienione = true;
@@ -1332,11 +1397,10 @@ export default function KlienciPage() {
               }
             }
           }
-
           return k;
         });
 
-        // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (DLA KARNETÓW CZASOWYCH)
+        // 2. AUTOMATYCZNA ROTACJA LUB AUTO-PRZEDŁUŻENIE (DLA KARNETÓW CZASOWYCH PO DNIU BUFOROWYM)
         const waitingPassIndex = parsedKarnety.findIndex((k: any, idx: number) =>
           idx > 0 && (k.statusTekst?.includes('Oczekujący') || (k.waznyDo && k.waznyDo >= todayDateOnly))
         );
@@ -1346,7 +1410,7 @@ export default function KlienciPage() {
           const defPrimary = ustrukturyzowaneKarnety.find(dk => dk.nazwa === primaryPass.nazwa);
           const isTimeBasedPass = defPrimary?.typ_karnetu === 'Na czas' || (!primaryPass.pozostaloWejsc && primaryPass.pozostaloWejsc !== 0);
 
-          const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < todayDateOnly) ||
+          const isPrimaryFinished = (primaryPass.waznyDo && primaryPass.waznyDo < yesterdayStr) ||
                                      (!isTimeBasedPass && primaryPass.pozostaloWejsc !== null && primaryPass.pozostaloWejsc <= 0 && !hasFutureBookings);
 
           if (isPrimaryFinished && waitingPassIndex !== -1) {
@@ -1424,10 +1488,20 @@ export default function KlienciPage() {
         let utrataCiaglosci = false;
         let finalKarnety = [];
 
-        // 3. BEZPIECZNA WERYFIKACJA KARNETÓW
+        // 3. BEZPIECZNA WERYFIKACJA KARNETÓW (DZIEŃ X AKTYWNY -> DZIEŃ X+1 BUFOR -> DZIEŃ X+2 ZNIKA Z KONTA)
         for (const k of parsedKarnety) {
           if (isContractPassCheck(k)) {
             finalKarnety.push(k);
+            continue;
+          }
+
+          const isBufferExpired = Boolean(k.waznyDo && k.waznyDo < yesterdayStr);
+          const isZeroGraceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly;
+          const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
+          const isLowPriceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && passPriceNum <= 150 && k.waznyDo && k.waznyDo < todayDateOnly;
+
+          if (isBufferExpired || isZeroGraceExpired || isLowPriceExpired) {
+            hasChanges = true;
             continue;
           }
 
@@ -1436,15 +1510,7 @@ export default function KlienciPage() {
             continue;
           }
 
-          const isZeroGraceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && k.zeroEntriesGraceUntil && k.zeroEntriesGraceUntil < todayDateOnly;
-          const passPriceNum = parseFloat(String(k.cena || '0').replace(/[^0-9.-]/g, '')) || 0;
-          const isLowPriceExpired = k.pozostaloWejsc !== null && k.pozostaloWejsc <= 0 && passPriceNum <= 150 && k.waznyDo && k.waznyDo < todayDateOnly;
-
-          if ((k.waznyDo && k.waznyDo < yesterdayStr) || isZeroGraceExpired || isLowPriceExpired) {
-            hasChanges = true;
-          } else {
-            finalKarnety.push(k);
-          }
+          finalKarnety.push(k);
         }
 
         if (parsedKarnety.length > 0 && finalKarnety.length === 0) {
@@ -1453,8 +1519,12 @@ export default function KlienciPage() {
         }
 
         let currentDiscount = c.discount;
-        let currentOffset = parseFloat(c.systemDiscountOffset || c.system_discount_offset || '0') || 0;
-        let hasLostContinuity = continuityBroken || c.hasLostContinuity || c.has_lost_continuity || false;
+        const rawStoredOffset = parseFloat(c.systemDiscountOffset || c.system_discount_offset || '0') || 0;
+        let currentOffset = rawStoredOffset > 0 ? rawStoredOffset : 0;
+        if (rawStoredOffset < 0) {
+          hasChanges = true;
+        }
+        let hasLostContinuity = continuityBroken || c.hasLostContinuity === true || c.hasLostContinuity === 'true' || c.has_lost_continuity === true || c.has_lost_continuity === 'true';
         let currentRabat = c.rabat !== undefined ? c.rabat : null;
 
         // KULOODPORNA BLOKADA ZAPĘTLANIA UTRATY CIĄGŁOŚCI W SUPABASE
@@ -1463,44 +1533,72 @@ export default function KlienciPage() {
             const typ = String(t.typ_operacji || '').toLowerCase();
             const op = String(t.opis || '').toLowerCase();
             if (typ.includes('umow') || op.includes('umow') || typ.includes('rata') || op.includes('rata') || op.includes('medicover')) return false;
+            if (op.includes('usunięcie') || op.includes('usuniecie') || typ === 'auto_przedluzenie_karnetu') return false;
             return typ.includes('karnet') || typ.includes('pass_') || op.includes('karnet') || op.includes('wejsc') || op.includes('wejść');
           })
           .map((t: any) => new Date(t.created_at).getTime())
           .sort((a: number, b: number) => b - a)[0] || 0;
 
-        const alreadyLoggedUtrata = clientTransakcje.some((t: any) => 
-          t.typ_operacji === 'utrata_ciaglosci' && new Date(t.created_at).getTime() >= lastPassPurchaseTime
-        );
-        if (utrataCiaglosci) {
-           if (!hasLostContinuity || currentDiscount > 0 || !alreadyLoggedUtrata) {
-               currentDiscount = '';
-               hasLostContinuity = true;
-               currentRabat = 0;
-               
-               const staryStd = calculateStandardSystemDiscount({ transakcje: clientTransakcje });
-               currentOffset = -staryStd;
-               hasChanges = true;
+        const lastUtrataTime = clientTransakcje
+          .filter((t: any) => String(t.typ_operacji || '').toLowerCase() === 'utrata_ciaglosci')
+          .map((t: any) => new Date(t.created_at).getTime())
+          .sort((a: number, b: number) => b - a)[0] || 0;
 
-               if (!alreadyLoggedUtrata) {
-                 await supabase.from('transakcje').insert([{
-                   klient_id: c.id,
-                   typ_operacji: 'utrata_ciaglosci',
-                   kwota: null,
-                   opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
-                 }]);
-                 
-                 clientTransakcje.push({
-                   typ_operacji: 'utrata_ciaglosci',
-                   created_at: new Date().toISOString(),
-                   opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
-                 });
-               }
-           }
-        } else if (finalKarnety.length === 0 && !hasLostContinuity) {
-           hasLostContinuity = true;
-           currentDiscount = '';
-           currentRabat = 0;
-           hasChanges = true;
+        const alreadyLoggedUtrata = lastUtrataTime > 0 && lastUtrataTime >= lastPassPurchaseTime;
+
+        if (utrataCiaglosci) {
+          if (!hasLostContinuity || Number(currentDiscount || 0) > 0 || !alreadyLoggedUtrata || Number(currentRabat || 0) !== 0 || currentOffset !== 0) {
+            currentDiscount = '';
+            hasLostContinuity = true;
+            currentRabat = 0;
+            currentOffset = 0;
+            hasChanges = true;
+
+            if (!alreadyLoggedUtrata) {
+              await supabase.from('transakcje').insert([{
+                klient_id: c.id,
+                typ_operacji: 'utrata_ciaglosci',
+                kwota: null,
+                opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
+              }]);
+
+              clientTransakcje.push({
+                typ_operacji: 'utrata_ciaglosci',
+                created_at: new Date().toISOString(),
+                opis: 'Automatyczne usunięcie wygasłego karnetu - utrata ciągłości i zniżek'
+              });
+            }
+          }
+        } else if (finalKarnety.length === 0) {
+          if (!hasLostContinuity || Number(currentRabat || 0) !== 0 || currentOffset !== 0) {
+            hasLostContinuity = true;
+            currentDiscount = '';
+            currentRabat = 0;
+            currentOffset = 0;
+            hasChanges = true;
+          }
+        } else if (finalKarnety.length > 0 && hasLostContinuity && !continuityBroken && lastPassPurchaseTime > lastUtrataTime) {
+          // Klient po wcześniejszej utracie ciągłości wykupił nowy karnet - przywracamy naliczanie ciągłości od zera
+          hasLostContinuity = false;
+          currentOffset = 0;
+          hasChanges = true;
+        }
+
+        // PRZELICZENIE I SYNCHRONIZACJA POPRAWNEGO PROGU CIĄGŁOŚCI (0% -> 2% -> 4% -> +1% DO MAX 25%)
+        const tempClientForCalc = {
+          ...c,
+          discount: currentDiscount,
+          hasLostContinuity,
+          has_lost_continuity: hasLostContinuity,
+          systemDiscountOffset: currentOffset,
+          system_discount_offset: currentOffset,
+          karnetyKlubowicza: finalKarnety,
+          transakcje: clientTransakcje
+        };
+        const expectedSysRabat = calculateSystemDiscount(tempClientForCalc, ustrukturyzowaneKarnety);
+        if (Number(currentRabat ?? -1) !== expectedSysRabat) {
+          currentRabat = expectedSysRabat;
+          hasChanges = true;
         }
 
         const calculatedExpiry = getLatestPassExpiry(finalKarnety);
@@ -1513,8 +1611,8 @@ export default function KlienciPage() {
                Cena: cenaAktywnegoKarnetu,
                discount: currentDiscount,
                rabat: currentRabat,
-               rabat_za_ciaglosc: hasLostContinuity ? '0%' : (c.rabat_za_ciaglosc ?? '0%'),
-               'Rabat za ciągłość': hasLostContinuity ? '0%' : (c['Rabat za ciągłość'] ?? '0%'),
+               rabat_za_ciaglosc: `${expectedSysRabat}%`,
+               'Rabat za ciągłość': `${expectedSysRabat}%`,
                system_discount_offset: currentOffset,
                hasLostContinuity: hasLostContinuity,
                has_lost_continuity: hasLostContinuity,
@@ -1650,33 +1748,37 @@ export default function KlienciPage() {
     setProfileClient(updatedClient);
     setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
     setIsEditingDiscount(false);
+    loadData(profileClient.id);
   };
 
   const handleSaveSystemDiscount = async () => {
     if (!profileClient) return;
-    const targetVal = parseFloat(systemDiscountInput) || 0;
+    const targetVal = Math.max(0, Math.min(25, parseFloat(systemDiscountInput) || 0));
     
-    const fakeClient = {...profileClient};
+    const fakeClient = { ...profileClient };
     fakeClient.hasLostContinuity = false;
     fakeClient.has_lost_continuity = false;
     fakeClient.discount = '';
-    const std = calculateStandardSystemDiscount(fakeClient);
+    const std = calculateStandardSystemDiscount(fakeClient, dostepneKarnety);
     
-    const newOffset = targetVal - std;
+    const newOffset = targetVal > std ? (targetVal - std) : 0;
+    const shouldMarkLost = targetVal === 0;
 
     const updatedClient = { 
         ...profileClient, 
         rabat: targetVal, 
         systemDiscountOffset: newOffset, 
-        hasLostContinuity: false,
-        has_lost_continuity: false
+        hasLostContinuity: shouldMarkLost,
+        has_lost_continuity: shouldMarkLost
     };
     
     const { error } = await supabase.from('klienci').update({ 
         rabat: targetVal, 
+        rabat_za_ciaglosc: `${targetVal}%`,
+        'Rabat za ciągłość': `${targetVal}%`,
         system_discount_offset: newOffset, 
-        hasLostContinuity: false,
-        has_lost_continuity: false
+        hasLostContinuity: shouldMarkLost,
+        has_lost_continuity: shouldMarkLost
     }).eq('id', profileClient.id);
     
     if (error) {
@@ -1687,6 +1789,7 @@ export default function KlienciPage() {
     setProfileClient(updatedClient);
     setClients(prev => prev.map(c => c.id === profileClient.id ? updatedClient : c));
     setIsEditingSystemDiscount(false);
+    loadData(profileClient.id);
   };
 
   const handleSaveCampDiscount = async () => {
@@ -1832,6 +1935,9 @@ export default function KlienciPage() {
       const poczatkowyStan = cenaWartosc > 0 ? (wplataWlasna - cenaWartosc) : wplataWlasna;
       const poczatkowyStanStr = `${poczatkowyStan.toFixed(2)} PLN`;
       const newClientId = Date.now();
+      const isMedicoverNew = (newClient.selectedPass || '').toLowerCase().includes('medicover');
+      const qualifiesForStartContinuity = Boolean(newClient.selectedPass && !isContract && !isMedicoverNew && cenaWartosc > 150);
+      const startContinuityDiscount = qualifiesForStartContinuity ? 2 : 0;
 
       const insertPayload: any = {
         id: newClientId,
@@ -1845,7 +1951,13 @@ export default function KlienciPage() {
         portfel: poczatkowyStan,
         Zarejestrowany: newClient.registered,
         karnetyKlubowicza: poczatkoweKarnety,
-        umowa_oplacona_do: initialUmowaOplaconaDo
+        umowa_oplacona_do: initialUmowaOplaconaDo,
+        rabat: startContinuityDiscount,
+        rabat_za_ciaglosc: `${startContinuityDiscount}%`,
+        'Rabat za ciągłość': `${startContinuityDiscount}%`,
+        system_discount_offset: 0,
+        hasLostContinuity: !qualifiesForStartContinuity,
+        has_lost_continuity: !qualifiesForStartContinuity
       };
 
       const { error } = await supabase.from('klienci').insert([insertPayload]);
@@ -1856,7 +1968,7 @@ export default function KlienciPage() {
           typ_operacji: isContract ? 'zakup_umowy' : 'zakup_karnetu',
           kwota: cenaWartosc > 0 ? -cenaWartosc : 0,
           opis: cenaWartosc > 0 
-            ? `${isContract ? 'Pierwsza opłata umowy 12M' : 'Pierwszy karnet'}: ${newClient.selectedPass} (Zadłużono portfel)` 
+            ? `${isContract ? 'Pierwsza opłata umowy 12M' : 'Pierwszy karnet'}: ${newClient.selectedPass} (${cenaWartosc.toFixed(2)} PLN - Zadłużono portfel)` 
             : `${isContract ? 'Pierwsza opłata umowy 12M' : 'Pierwszy karnet'}: ${newClient.selectedPass} (Karnet bezpłatny / 0.00 PLN)`
         }]);
       }
@@ -2072,11 +2184,15 @@ export default function KlienciPage() {
       const isMedicover = (extendSelectedNewPassName || '').toLowerCase().includes('medicover');
 
       let bazowaCena = 0;
-      if (extendCustomPriceInput && extendCustomPriceInput.trim() !== '') {
+      const hasCustomRate = Boolean(extendCustomPriceInput && extendCustomPriceInput.trim() !== '');
+      if (hasCustomRate) {
         bazowaCena = parseFloat(extendCustomPriceInput.replace(/[^0-9.]/g, '')) || 0;
       } else {
         bazowaCena = defKarnetu ? parseFloat(defKarnetu.cena) : parseFloat(String(extendPassTarget.cena).replace(/[^0-9.]/g, '')) || 0;
       }
+
+      const catalogPrice = defKarnetu ? (parseFloat(defKarnetu.cena) || 0) : bazowaCena;
+      const isPromoCustomPrice = Boolean(hasCustomRate && catalogPrice > 0 && bazowaCena < catalogPrice);
 
       const activeDiscount = getEffectiveDiscount(profileClient, isContract, bazowaCena, extendSelectedNewPassName);
       
@@ -2089,11 +2205,12 @@ export default function KlienciPage() {
         targetExpiryDate = getContractEndOfMonthDate(extendPassTarget.waznyDo);
       }
 
+      const promoSuffix = isPromoCustomPrice ? ' (cena promocyjna)' : '';
       let nowyStanStr = profileClient.wallet;
-      let logKwota = 0;
+      let logKwota = kwotaKarnetu;
       let logOpis = isContract
         ? `Opłata raty umowy 12M: ${extendSelectedNewPassName} (opłacono do ${targetExpiryDate}) - Gotówka / Zapłacono`
-        : `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Zapłacono z góry / Gotówka)`;
+        : `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (${kwotaKarnetu.toFixed(2)} PLN - Zapłacono z góry / Gotówka)${promoSuffix}`;
 
       if (paymentMethod === 'later' && kwotaKarnetu > 0) {
         const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]/g, "")) || 0;
@@ -2102,7 +2219,7 @@ export default function KlienciPage() {
         logKwota = -kwotaKarnetu;
         logOpis = isContract
           ? `Opłata raty umowy 12M: ${extendSelectedNewPassName} do ${targetExpiryDate} (Obciążenie portfela - do zapłaty)`
-          : `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Obciążenie portfela - do zapłaty)`;
+          : `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (${kwotaKarnetu.toFixed(2)} PLN - Obciążenie portfela - do zapłaty)${promoSuffix}`;
       } else if (kwotaKarnetu === 0) {
         logKwota = 0;
         logOpis = `Przedłużenie karnetu: ${extendSelectedNewPassName} do ${targetExpiryDate} (Karnet 0.00 PLN - portfel bez zmian)`;
@@ -2168,6 +2285,12 @@ export default function KlienciPage() {
         Portfel: nowyStanStr,
         portfel: parseFloat(String(nowyStanStr).replace(/[^0-9.-]/g, '')) || 0
       };
+
+      if (!isContract && kwotaKarnetu > 150 && !isMedicover && !isPromoCustomPrice) {
+        updatePayload.hasLostContinuity = false;
+        updatePayload.has_lost_continuity = false;
+        updatePayload.system_discount_offset = 0;
+      }
 
       if (isContract) {
         updatePayload.umowa_oplacona_do = targetExpiryDate;
@@ -2278,10 +2401,10 @@ export default function KlienciPage() {
       const parsedLimitWejsc = limitWejscBaza !== null ? parseInt(limitWejscBaza, 10) : null;
 
       let nowyStanStr = profileClient.wallet;
-      let logKwota = 0;
+      let logKwota = kwotaKarnetu;
       let logOpis = isContract
         ? `Dodano karnet na umowę: ${selectedPassToAdd} (opłacono do ${dataWygasnieciaStr}) - Zapłacono z góry`
-        : `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Zapłacono z góry)`;
+        : `Dodano karnet: ${selectedPassToAdd} (${kwotaKarnetu.toFixed(2)} PLN) ${znizkaTekst} (Zapłacono z góry)`;
 
       if (paymentMethod === 'later' && kwotaKarnetu > 0) {
         const currentWalletNum = parseFloat(String(profileClient.wallet).replace(/[^0-9.-]/g, "")) || 0;
@@ -2290,7 +2413,7 @@ export default function KlienciPage() {
         logKwota = -kwotaKarnetu;
         logOpis = isContract
           ? `Dodano karnet na umowę: ${selectedPassToAdd} (Obciążenie portfela - do zapłaty)`
-          : `Dodano karnet: ${selectedPassToAdd} ${znizkaTekst} (Obciążenie portfela - do zapłaty)`;
+          : `Dodano karnet: ${selectedPassToAdd} (${kwotaKarnetu.toFixed(2)} PLN) ${znizkaTekst} (Obciążenie portfela - do zapłaty)`;
       } else if (kwotaKarnetu === 0) {
         logKwota = 0;
         logOpis = `Dodano karnet: ${selectedPassToAdd} (Karnet 0.00 PLN - portfel bez zmian)`;
@@ -2333,6 +2456,12 @@ export default function KlienciPage() {
         Portfel: nowyStanStr,
         portfel: parseFloat(String(nowyStanStr).replace(/[^0-9.-]/g, '')) || 0
       };
+
+      if (!isContract && kwotaKarnetu > 150 && !isMedicover) {
+        updatePayload.hasLostContinuity = false;
+        updatePayload.has_lost_continuity = false;
+        updatePayload.system_discount_offset = 0;
+      }
 
       if (isContract) {
         updatePayload.umowa_oplacona_do = dataWygasnieciaStr;
@@ -2613,7 +2742,6 @@ export default function KlienciPage() {
       isSubmittingRef.current = false;
     }
   };
-
   // BEZPOŚREDNIE ODBLOKOWANIE KONTA BEZ NARUSZANIA ZAWIESZEŃ
   const handleDirectUnblockAccount = async (targetClient: any) => {
     if (!targetClient || isSubmittingRef.current) return;
@@ -3598,7 +3726,7 @@ export default function KlienciPage() {
                     </div>
 
                     {/* RABAT SYSTEMOWY (CIĄGŁOŚĆ) */}
-                    <div className="flex items-center gap-2 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200" title="Rabat za ciągłość zakupów (> 150 zł, bez umów i Medicover)">
+                    <div className="flex items-center gap-2 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200" title="Rabat za ciągłość zakupów (> 150 zł, bez kodów rabatowych, promocji, umów i Medicover)">
                        <span className="text-[10px] font-bold text-sky-800 uppercase whitespace-nowrap">Rabat za ciągłość:</span>
                        {isEditingSystemDiscount ? (
                          <div className="flex items-center gap-1">
@@ -4044,8 +4172,7 @@ export default function KlienciPage() {
                             });
                           }
                         });
-
-                      (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
+                        (profileClient.zapisyNadchodzace || []).forEach((item: any) => {
                         const classDetails = findClassDetailsInGrafik(item.classKey, zapisaneZajecia, jednorazoweZajecia, nadpisaneZajeciaDni);
                         const { display: displayDate, sortTime: classStartMs } = formatDisplayClassDate(item.data);
 
