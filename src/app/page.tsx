@@ -404,8 +404,8 @@ export default function DashboardPage() {
   const [confirmDeleteCountdownId, setConfirmDeleteCountdownId] = useState<number | null>(null);
   const [showAllCountdowns, setShowAllCountdowns] = useState(false);
 
-  // POMOCNIK GENEROWANIA WARIANTÓW CLASS_KEY (ODPORNY NA PREFIKSY NP. j_15)
-  const getKeysVariants = (classId: string | number, dateStr: string) => {
+  // POMOCNIK GENEROWANIA WARIANTÓW CLASS_KEY (ODPORNY NA PREFIKSY NP. j_15 ORAZ BIEŻĄCY ROK)
+  const getKeysVariants = (classId: string | number, dateStr: string, explicitYear?: number) => {
     const keys = new Set<string>();
     if (!dateStr) return [`${classId}`];
     
@@ -415,12 +415,7 @@ export default function DashboardPage() {
       const parts = dateStr.split('/');
       const d = parseInt(parts[0], 10);
       const m = parseInt(parts[1], 10);
-      const now = new Date();
-      let yr = selectedWeekDate ? selectedWeekDate.getFullYear() : now.getFullYear();
-      
-      if (m < (now.getMonth() + 1) || (m === (now.getMonth() + 1) && d < now.getDate())) {
-        yr = now.getFullYear() + 1;
-      }
+      const yr = explicitYear || (selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear());
 
       const dPadded = String(d).padStart(2, '0');
       const mPadded = String(m).padStart(2, '0');
@@ -478,11 +473,36 @@ export default function DashboardPage() {
     }
   };
 
+  // POMOCNIK: POBIERANIE PEŁNEGO IMIENIA I NAZWISKA KLUBOWICZA
+  const resolveClientFullName = async (clientId: number | string, fallbackObj?: any): Promise<string> => {
+    const idNum = Number(clientId);
+    const fromState = (klienciList || []).find((c: any) => Number(c.id) === idNum);
+    if (fromState) {
+      const full = `${fromState.firstName || fromState.Imię || ''} ${fromState.lastName || fromState.Nazwisko || ''}`.trim();
+      if (full) return full;
+    }
+    if (fallbackObj) {
+      const full = `${fallbackObj.firstName || fallbackObj.Imię || ''} ${fallbackObj.lastName || fallbackObj.Nazwisko || ''}`.trim();
+      if (full) return full;
+    }
+    const { data: dbClient } = await supabase
+      .from('klienci')
+      .select('id, "Imię", "Nazwisko"')
+      .eq('id', idNum)
+      .maybeSingle();
+    if (dbClient) {
+      const full = `${(dbClient as any)['Imię'] || ''} ${(dbClient as any)['Nazwisko'] || ''}`.trim();
+      if (full) return full;
+    }
+    return `Klubowicz #${idNum}`;
+  };
+
   // AUTOMATYCZNY AWANS Z LISTY REZERWOWEJ I WYSYŁKA PUSH
   const promoteWaitlistMember = async (classItem: any, displayDate: string, currentSignups: any[], removedUserId: number) => {
     if (!classItem) return;
     const classKey = `${classItem.id}_${displayDate}`;
-    const allVariantKeys = getKeysVariants(classItem.id, displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const allVariantKeys = getKeysVariants(classItem.id, displayDate, classYear);
     const limitZajec = classItem.limit || 12;
     
     const pozostali = currentSignups.filter((u: any) => String(u.klient_id || u.id) !== String(removedUserId));
@@ -497,7 +517,6 @@ export default function DashboardPage() {
         const p = displayDate.split('-').map(Number);
         m = p[1]; d = p[2];
       }
-      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
       const [sh = '00', sm = '00'] = (classItem.start || '00:00').split(':');
       const classStartDateTime = new Date(classYear, m - 1, d, parseInt(sh), parseInt(sm), 0);
       const diffMinutes = (classStartDateTime.getTime() - new Date().getTime()) / (1000 * 60);
@@ -521,6 +540,7 @@ export default function DashboardPage() {
       if (promotedUser) {
         const pClientId = Number(promotedUser.klient_id || promotedUser.id);
         const pZapisId = promotedUser.zapis_id;
+        const promotedFullName = await resolveClientFullName(pClientId, promotedUser);
 
         if (pZapisId) {
           await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).eq('id', pZapisId);
@@ -559,15 +579,15 @@ export default function DashboardPage() {
           klient_id: pClientId, 
           typ_operacji: 'awans_z_krzesełka', 
           class_key: classKey, 
-          opis: `${promotedUser.firstName || 'Klubowicz'} ${promotedUser.lastName || ''} - Automatyczny awans z listy rezerwowej na listę główną: ${classItem.title} (${formattedFullDate} ${classItem.start}-${classItem.end || ''}, ${durationText}). Status: ✅ Lista główna.` 
+          opis: `${promotedFullName} - Automatyczny awans z listy rezerwowej na listę główną: ${classItem.title} (${formattedFullDate} ${classItem.start}-${classItem.end || ''}, ${durationText}). Status: ✅ Lista główna.` 
         }]);
         
         await supabase.from('booking_logs').insert([{
           action_type: 'WAITLIST_PROMOTION',
           status: 'SUCCESS',
-          reason: `Klubowicz ID:${pClientId} awansowany na listę główną w ${classKey}`,
+          reason: `${promotedFullName} (ID:${pClientId}) awansowany na listę główną w ${classKey}`,
           rule_applied: 'waitlist_auto_promotion',
-          payload: { klient_id: pClientId, class_key: classKey, zapis_id: pZapisId }
+          payload: { klient_id: pClientId, klient_nazwa: promotedFullName, class_key: classKey, zapis_id: pZapisId }
         }]);
       }
     }
@@ -625,45 +645,20 @@ export default function DashboardPage() {
 
     if (normA === normB) return true;
     if (normA.replace(/\s+/g, '') === normB.replace(/\s+/g, '')) return true;
+    if (normA.length >= 5 && normB.length >= 5 && (normA.includes(normB) || normB.includes(normA))) return true;
 
     return false;
   };
 
-  // WERYFIKACJA UPRAWNIEŃ KARNETU DO ZAJĘĆ
+  // WERYFIKACJA UPRAWNIEŃ KARNETU DO ZAJĘĆ — ŚCIŚLE WEDŁUG USTAWIEŃ PRZY DANYM KARNCIE (BEZ WYJĄTKÓW PO NAZWIE)
   const checkPassAllowsClass = (passItem: any, classTitle: string, allPassDefs: any[]) => {
     if (!passItem || !classTitle) return false;
     const passName = (passItem.nazwa || passItem.pass || '').trim();
     const normPassName = normalizeText(passName);
     const normClassTitle = normalizeText(classTitle);
 
-    // BEZWZGLĘDNA REGUŁA: Trening personalny wyłącznie dla osób z aktywną umową 12M!
-    const isPersonalTraining = normClassTitle.includes('personaln');
-    if (isPersonalTraining) {
-      const def = (allPassDefs || []).find((d: any) => {
-        const defName = (d.nazwa || '').trim();
-        return defName.toLowerCase() === passName.toLowerCase() || normalizeText(defName) === normPassName;
-      });
-      return isContractPass(passItem) || (def ? isContractPass(def) : false);
-    }
-
-    if (normPassName.includes('open') || normPassName.includes('medicover')) return true;
-
-    const passAccessType = normalizeText(passItem.dostepDo || passItem.dostep_do_zajec || '');
-    if (passAccessType.includes('wszystk') || passAccessType === 'all') {
-      return true;
-    }
-
-    const allowedList = passItem.zaznaczoneZajecia || passItem.wybraneZajecia || [];
-    if (Array.isArray(allowedList) && allowedList.length > 0) {
-      const isMatched = allowedList.some((item: any) => {
-        const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
-        const normItem = normalizeText(itemName);
-        return normItem === normClassTitle || normItem.replace(/\s+/g, '') === normClassTitle.replace(/\s+/g, '');
-      });
-      if (isMatched) return true;
-    }
-
-    const def = allPassDefs.find((d: any) => {
+    // 1. Zawsze szukamy aktualnej definicji karnetu w bazie (nadrzędna nad kopią w profilu klienta)
+    const def = (allPassDefs || []).find((d: any) => {
       const defName = (d.nazwa || '').trim();
       return defName.toLowerCase() === passName.toLowerCase() || normalizeText(defName) === normPassName;
     });
@@ -681,23 +676,40 @@ export default function DashboardPage() {
         meta = {};
       }
 
-      const defAllowedList = 
-        meta.zaznaczoneZajecia || meta.zaznaczone_zajecia ||
-        meta.wybraneZajecia || meta.wybrane_zajecia || 
-        def.zaznaczoneZajecia || [];
+      const defAllowedList =
+        (Array.isArray(def.dostep_zajecia) && def.dostep_zajecia.length > 0 ? def.dostep_zajecia : null) ||
+        meta.zaznaczoneZajecia ||
+        meta.zaznaczone_zajecia ||
+        meta.wybraneZajecia ||
+        meta.wybrane_zajecia ||
+        def.zaznaczoneZajecia ||
+        [];
 
       if (Array.isArray(defAllowedList) && defAllowedList.length > 0) {
-        const isMatched = defAllowedList.some((item: any) => {
+        return defAllowedList.some((item: any) => {
           const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
           const normItem = normalizeText(itemName);
           return normItem === normClassTitle || normItem.replace(/\s+/g, '') === normClassTitle.replace(/\s+/g, '');
         });
-        if (isMatched) return true;
       }
+
+      // Wybrano "określonych zajęć", ale żadne zajęcia nie są zaznaczone -> brak dostępu
+      return false;
     }
 
-    if (normPassName === normClassTitle || normPassName.replace(/\s+/g, '') === normClassTitle.replace(/\s+/g, '')) {
+    // 2. Fallback wyłącznie gdy definicji karnetu nie ma już w cenniku
+    const passAccessType = normalizeText(passItem.dostepDo || passItem.dostep_do_zajec || '');
+    if (passAccessType.includes('wszystk') || passAccessType === 'all') {
       return true;
+    }
+
+    const allowedList = passItem.zaznaczoneZajecia || passItem.wybraneZajecia || [];
+    if (Array.isArray(allowedList) && allowedList.length > 0) {
+      return allowedList.some((item: any) => {
+        const itemName = typeof item === 'string' ? item : (item.nazwa || item.title || item.name || '');
+        const normItem = normalizeText(itemName);
+        return normItem === normClassTitle || normItem.replace(/\s+/g, '') === normClassTitle.replace(/\s+/g, '');
+      });
     }
 
     return false;
@@ -1075,7 +1087,7 @@ export default function DashboardPage() {
 
           if (diffMinutes <= cutoffMin && diffMinutes >= 0) {
             hasChanges = true;
-            const keysToDelete = getKeysVariants(cls.id, col.date);
+            const keysToDelete = getKeysVariants(cls.id, col.date, classYear);
 
             await supabase
               .from('zapisy_zajec')
@@ -1142,7 +1154,8 @@ export default function DashboardPage() {
     jednorazowe: any[],
     signupsMap: { [key: string]: any[] },
     overridesMap: { [key: string]: any },
-    days: any[]
+    days: any[],
+    clientsMap?: Map<number, any>
   ) => {
     const now = new Date();
     let hasPromotions = false;
@@ -1198,7 +1211,9 @@ export default function DashboardPage() {
               hasPromotions = true;
               const pClientId = Number(promotedUser.klient_id || promotedUser.id);
               const pZapisId = promotedUser.zapis_id;
-              const allVariantKeys = getKeysVariants(cls.id, col.date);
+              const allVariantKeys = getKeysVariants(cls.id, col.date, classYear);
+              const clientFromMap = clientsMap?.get(pClientId);
+              const promotedFullName = await resolveClientFullName(pClientId, clientFromMap || promotedUser);
 
               if (pZapisId) {
                 await supabase.from('zapisy_zajec').update({ status: 'zapisany' }).eq('id', pZapisId);
@@ -1222,15 +1237,15 @@ export default function DashboardPage() {
                 klient_id: pClientId, 
                 typ_operacji: 'awans_z_krzesełka', 
                 class_key: cls.classKey, 
-                opis: `${promotedUser.firstName || 'Klubowicz'} ${promotedUser.lastName || ''} - Automatyczny awans z listy rezerwowej na listę główną: ${cls.title} (${formattedFullDate} ${cls.start}-${cls.end || ''}, ${durationText}). Status: ✅ Lista główna.` 
+                opis: `${promotedFullName} - Automatyczny awans z listy rezerwowej na listę główną: ${cls.title} (${formattedFullDate} ${cls.start}-${cls.end || ''}, ${durationText}). Status: ✅ Lista główna.` 
               }]);
               
               await supabase.from('booking_logs').insert([{
                 action_type: 'WAITLIST_PROMOTION',
                 status: 'SUCCESS',
-                reason: `Klubowicz ID:${pClientId} awansowany automatycznie w tle na listę główną w ${cls.classKey}`,
+                reason: `${promotedFullName} (ID:${pClientId}) awansowany automatycznie w tle na listę główną w ${cls.classKey}`,
                 rule_applied: 'waitlist_background_promotion',
-                payload: { klient_id: pClientId, class_key: cls.classKey, zapis_id: pZapisId }
+                payload: { klient_id: pClientId, klient_nazwa: promotedFullName, class_key: cls.classKey, zapis_id: pZapisId }
               }]);
             }
           }
@@ -1241,6 +1256,7 @@ export default function DashboardPage() {
     return hasPromotions;
   };
 
+  // AUTOMATYCZNE ODWOŁYWANIE ZAJĘĆ (DZIAŁA JEDNORAZOWO DLA KAŻDEJ ROLI — RĘCZNE PRZYWRÓCENIE PRZEZ ADMINA JEST NADRZĘDNE)
   const processAutoCancellations = async (
     classes: any[],
     jednorazowe: any[],
@@ -1248,10 +1264,8 @@ export default function DashboardPage() {
     overridesMap: { [key: string]: any },
     rules: any,
     days: any[],
-    currentRole: string = 'klubowicz'
+    manuallyRestoredKeys: Set<string> = new Set()
   ) => {
-    if (currentRole !== 'admin') return false;
-
     const now = new Date();
     let hasChanges = false;
 
@@ -1275,7 +1289,11 @@ export default function DashboardPage() {
       const allClasses = [...stdDnia, ...jednorazDnia];
 
       for (const cls of allClasses) {
-        if (cls.isOdwołane || cls.isUsunięte || cls.prevent_auto_cancel || cls.manual_restore) continue;
+        const classYear = col.fullDate ? col.fullDate.getFullYear() : now.getFullYear();
+        const allVariantKeys = getKeysVariants(cls.id, col.date, classYear);
+        const isManuallyRestored = allVariantKeys.some(vk => manuallyRestoredKeys.has(vk));
+
+        if (cls.isOdwołane || cls.isUsunięte || cls.prevent_auto_cancel || cls.manual_restore || isManuallyRestored) continue;
 
         const trainingName = (cls.title || '').trim();
         let minRequired = rules.min_participants;
@@ -1296,7 +1314,6 @@ export default function DashboardPage() {
 
         if (minRequired && minRequired > 0 && deadlineMins !== null && deadlineMins !== undefined && deadlineMins > 0) {
           const [dStr, mStr] = col.date.split('/');
-          const classYear = col.fullDate ? col.fullDate.getFullYear() : now.getFullYear();
           const [sh = '00', sm = '00'] = (cls.start || '00:00').split(':');
           const classStartDateTime = new Date(classYear, parseInt(mStr) - 1, parseInt(dStr), parseInt(sh), parseInt(sm), 0);
           const diffMinutes = (classStartDateTime.getTime() - now.getTime()) / (1000 * 60);
@@ -1309,7 +1326,18 @@ export default function DashboardPage() {
               continue;
             }
 
-            const allVariantKeys = getKeysVariants(cls.id, col.date);
+            // Ochrona w bazie przed wielokrotnym odwołaniem tego samego terminu (oraz po ręcznym przywróceniu przez Admina)
+            const { data: existingCancelOrRestoreLog } = await supabase
+              .from('booking_logs')
+              .select('id')
+              .in('action_type', ['CLASS_AUTO_CANCELLED', 'CLASS_AUTO_CANCELLED_ON_UNENROLL', 'CLASS_MANUAL_RESTORED'])
+              .in('rule_applied', allVariantKeys.map(vk => `auto_cancel_guard_${vk}`))
+              .limit(1);
+
+            if (existingCancelOrRestoreLog && existingCancelOrRestoreLog.length > 0) {
+              continue;
+            }
+
             const { data: liveDbParticipants, error: liveDbErr } = await supabase
               .from('zapisy_zajec')
               .select('*')
@@ -1381,14 +1409,13 @@ export default function DashboardPage() {
                 });
               }
 
-              const keysToDelete = getKeysVariants(cls.id, col.date);
-              await supabase.from('zapisy_zajec').delete().in('class_key', keysToDelete);
+              await supabase.from('zapisy_zajec').delete().in('class_key', allVariantKeys);
 
               await supabase.from('booking_logs').insert([{
                 action_type: 'CLASS_AUTO_CANCELLED',
                 status: 'SUCCESS',
                 reason: `Zajęcia ${cls.title} (${cls.classKey}) odwołane automatycznie (${activeSignups.length}/${minRequired} os.). Wypisano ${liveDbParticipants.length} osób i zwrócono wejścia.`,
-                rule_applied: 'min_participants_auto_cancel',
+                rule_applied: `auto_cancel_guard_${cls.classKey}`,
                 payload: { class_key: cls.classKey, participants_count: activeSignups.length, min_required: minRequired }
               }]);
             }
@@ -1446,7 +1473,19 @@ export default function DashboardPage() {
 
       if (diffMinutes <= deadlineMins) {
         const classKey = `${classItem.id}_${displayDate}`;
-        const allVariantKeys = getKeysVariants(classItem.id, displayDate);
+        const allVariantKeys = getKeysVariants(classItem.id, displayDate, classYear);
+
+        // Jeśli zajęcia były już wcześniej automatycznie odwołane i ręcznie przywrócone przez Admina -> NIE odwołuj ponownie
+        const { data: existingRestoreOrCancel } = await supabase
+          .from('booking_logs')
+          .select('id')
+          .in('action_type', ['CLASS_AUTO_CANCELLED', 'CLASS_AUTO_CANCELLED_ON_UNENROLL', 'CLASS_MANUAL_RESTORED'])
+          .in('rule_applied', allVariantKeys.map(vk => `auto_cancel_guard_${vk}`))
+          .limit(1);
+
+        if (existingRestoreOrCancel && existingRestoreOrCancel.length > 0) {
+          return false;
+        }
 
         await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
         const rowsToInsert = allVariantKeys.map(vKey => ({
@@ -1511,7 +1550,7 @@ export default function DashboardPage() {
           action_type: 'CLASS_AUTO_CANCELLED_ON_UNENROLL',
           status: 'SUCCESS',
           reason: `Zajęcia ${classItem.title} (${classKey}) odwołane natychmiast po wypisaniu uczestnika (${activeSignupsRemaining.length}/${minRequired} os.). Wypisano ${currentRemainingSignups.length} osób i zwrócono wejścia.`,
-          rule_applied: 'min_participants_auto_cancel_immediate',
+          rule_applied: `auto_cancel_guard_${classKey}`,
           payload: { class_key: classKey, participants_count: activeSignupsRemaining.length, min_required: minRequired }
         }]);
 
@@ -1536,7 +1575,7 @@ export default function DashboardPage() {
       if (foundKey && bookingRules.min_participants_per_class[foundKey] !== null && bookingRules.min_participants_per_class[foundKey] !== undefined) {
         minRequired = bookingRules.min_participants_per_class[foundKey];
       }
-    }
+      }
     let deadlineMins = bookingRules.auto_cancel_deadline_minutes;
     if (bookingRules.auto_cancel_deadline_per_class) {
       const foundKey = Object.keys(bookingRules.auto_cancel_deadline_per_class).find(k => areClassNamesMatching(k, trainingName));
@@ -1931,7 +1970,8 @@ export default function DashboardPage() {
         rodzajeData,
         rawWydarzeniaData,
         limityKlubowiczowData,
-        countdownRes
+        countdownRes,
+        manualRestoreLogsRes
       ] = await Promise.all([
         supabase.from('club_booking_rules').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle(),
         supabase.auth.getSession(),
@@ -1952,8 +1992,24 @@ export default function DashboardPage() {
         fetchAllFromSupabase('rodzaje_zajec', 'id', true, 10),
         fetchAllFromSupabase('wydarzenia_kilkudniowe', 'date_from', true, 50),
         fetchAllFromSupabase('indywidualne_limity_zapisow', 'created_at', false, 10),
-        supabase.from('odliczanie_wydarzen').select('*').gte('data_wydarzenia', todayIsoInit).order('data_wydarzenia', { ascending: true }).order('created_at', { ascending: true })
+        supabase.from('odliczanie_wydarzen').select('*').gte('data_wydarzenia', todayIsoInit).order('data_wydarzenia', { ascending: true }).order('created_at', { ascending: true }),
+        supabase.from('booking_logs').select('rule_applied, payload').eq('action_type', 'CLASS_MANUAL_RESTORED').order('created_at', { ascending: false }).limit(500)
       ]);
+
+      const manuallyRestoredKeysSet = new Set<string>();
+      if (manualRestoreLogsRes?.data) {
+        manualRestoreLogsRes.data.forEach((logItem: any) => {
+          if (logItem.rule_applied && String(logItem.rule_applied).startsWith('auto_cancel_guard_')) {
+            manuallyRestoredKeysSet.add(String(logItem.rule_applied).replace('auto_cancel_guard_', ''));
+          }
+          if (Array.isArray(logItem.payload?.variant_keys)) {
+            logItem.payload.variant_keys.forEach((vk: string) => manuallyRestoredKeysSet.add(vk));
+          }
+          if (logItem.payload?.class_key) {
+            manuallyRestoredKeysSet.add(String(logItem.payload.class_key));
+          }
+        });
+      }
 
       if (limityKlubowiczowData) {
         setIndywidualneLimity(limityKlubowiczowData);
@@ -2001,18 +2057,19 @@ export default function DashboardPage() {
         }
       }
 
-      // POBIERANIE TRANSAKCJI: Dla Administratora pobieramy pełną historię z wybranego zakresu dat paginacją (bez limitu 1000 rekordów)
+      // POBIERANIE TRANSAKCJI: Dla Administratora pobieramy dokładnie 1000 ostatnich operacji (szybkie ładowanie strony głównej)
       let tData: any[] = [];
       if (determinedRole === 'admin') {
-        const rangeFrom = operationsDateRange.from;
-        tData = await fetchAllFromSupabase(
-          'transakcje',
-          'created_at',
-          false,
-          100,
-          '*',
-          rangeFrom ? (q: any) => q.gte('created_at', `${rangeFrom}T00:00:00`) : undefined
-        );
+        const { data: recentTxData, error: recentTxError } = await supabase
+          .from('transakcje')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(1000);
+
+        if (recentTxError) {
+          console.error('Błąd pobierania ostatnich 1000 operacji:', recentTxError);
+        }
+        tData = recentTxData || [];
         setWszystkieTransakcje(tData);
       } else {
         setWszystkieTransakcje([]);
@@ -2023,11 +2080,16 @@ export default function DashboardPage() {
         ustrukturyzowaneKarnetyDef = karnetyDefData.map((k: any) => {
           let meta: Record<string, any> = {};
           try { meta = JSON.parse(k.inne_ustawienia || '{}'); } catch(e) {}
+          const allowedClassesFromDef =
+            (Array.isArray(k.dostep_zajecia) && k.dostep_zajecia.length > 0 ? k.dostep_zajecia : null) ||
+            meta.zaznaczoneZajecia ||
+            meta.wybraneZajecia ||
+            [];
           return {
             ...k,
             cena: k.cena_brutto || k.cena || '0.00',
             ilosc_wejsc: k.ilosc_wejsc || meta.ilosc_wejsc || meta.iloscTreningow || null,
-            zaznaczoneZajecia: meta.zaznaczoneZajecia || meta.wybraneZajecia || [],
+            zaznaczoneZajecia: allowedClassesFromDef,
             dostep_do_zajec: k.dostep_do_zajec || 'wszystkich zajęć',
             isContract12M: k.typ_karnetu === 'Umowa 12 miesięcy' || meta.isContract12M === true
           };
@@ -2035,6 +2097,7 @@ export default function DashboardPage() {
         setDostepneKarnety(ustrukturyzowaneKarnetyDef);
       }
 
+      const clientsByIdMap = new Map<number, any>();
       let matchedCurrentClient: any = null;
       if (klienciData) {
         const todayDateOnly = new Date().toISOString().split('T')[0];
@@ -2213,8 +2276,14 @@ export default function DashboardPage() {
               }
             }
 
-            k.dostepDo = k.dostepDo || k.dostep_do_zajec || pasujacyDef?.dostep_do_zajec || 'wszystkich zajęć';
-            k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || pasujacyDef?.zaznaczoneZajecia || [];
+            // Aktualna definicja z cennika ma zawsze pierwszeństwo nad starą kopią w profilu klienta
+            if (pasujacyDef) {
+              k.dostepDo = pasujacyDef.dostep_do_zajec || 'wszystkich zajęć';
+              k.zaznaczoneZajecia = pasujacyDef.zaznaczoneZajecia || [];
+            } else {
+              k.dostepDo = k.dostepDo || k.dostep_do_zajec || 'wszystkich zajęć';
+              k.zaznaczoneZajecia = k.zaznaczoneZajecia || k.wybraneZajecia || [];
+            }
 
             return k;
           });
@@ -2339,7 +2408,7 @@ export default function DashboardPage() {
           const powiazanyTrener = trenerzyData?.find((t: any) => t.email && t.email === (c['E-mail'] || c.email));
           const clientTransakcje = (determinedRole === 'admin' && tData) ? tData.filter((t: any) => t.klient_id === c.id) : [];
 
-          return {
+          const enrichedClientObj = {
             ...c,
             _rawKarnety: c.karnetyKlubowicza,
             id: c.id,
@@ -2370,6 +2439,9 @@ export default function DashboardPage() {
             zapisyPrzeszle: c.zapisyPrzeszle || [],
             zapisyWypisy: c.zapisyWypisy || []
           };
+
+          clientsByIdMap.set(Number(c.id), enrichedClientObj);
+          return enrichedClientObj;
         }));
 
         setKlienciList(enriched);
@@ -2521,6 +2593,7 @@ export default function DashboardPage() {
       const nadpisaniaMap: { [key: string]: any } = {};
       if (nadpisaniaData) {
         nadpisaniaData.forEach((n: any) => {
+          const isExplicitlyRestored = manuallyRestoredKeysSet.has(n.class_key);
           const itemVal = { 
             start: n.start, 
             end: n.end, 
@@ -2528,8 +2601,8 @@ export default function DashboardPage() {
             limit: n.limit, 
             isOdwołane: n.is_odwolane, 
             isUsunięte: n.is_usuniete,
-            prevent_auto_cancel: n.is_odwolane === false,
-            manual_restore: n.is_odwolane === false
+            prevent_auto_cancel: isExplicitlyRestored,
+            manual_restore: isExplicitlyRestored
           };
           nadpisaniaMap[n.class_key] = itemVal;
           if (n.class_key && n.class_key.includes('_')) {
@@ -2552,10 +2625,13 @@ export default function DashboardPage() {
         });
 
         sortedZapisy.forEach((z: any) => {
+          const matchedClientObj = clientsByIdMap.get(Number(z.klient_id));
           const entry = {
             ...z,
             zapis_id: z.id,
             id: z.klient_id,
+            firstName: matchedClientObj?.firstName || '',
+            lastName: matchedClientObj?.lastName || '',
             status: z.status || 'zapisany',
             waitlist_cutoff_minutes: z.waitlist_cutoff_minutes !== undefined && z.waitlist_cutoff_minutes !== null ? Number(z.waitlist_cutoff_minutes) : 30,
             obecny: z.obecny,
@@ -2611,7 +2687,8 @@ export default function DashboardPage() {
         mappedJednorazowe,
         groupedZapisy,
         nadpisaniaMap,
-        activeDashboardDays
+        activeDashboardDays,
+        clientsByIdMap
       );
 
       await processAutoCancellations(
@@ -2621,7 +2698,7 @@ export default function DashboardPage() {
         nadpisaniaMap,
         parsedRules,
         activeDashboardDays,
-        determinedRole
+        manuallyRestoredKeysSet
       );
 
       await checkAndSendTrainerReminders(
@@ -2703,12 +2780,13 @@ export default function DashboardPage() {
       supabase.removeChannel(channel);
       window.removeEventListener('storage', scheduleReload);
     };
-  }, [selectedWeekDate, operationsDateRange.from]);
+  }, [selectedWeekDate]);
 
   const openHistoryModal = async (item: any, displayDate: string) => {
     setHistoryModalClass({ ...item, displayDate });
     setModalHistoryData([]); 
-    const keys = getKeysVariants(item.id, displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const keys = getKeysVariants(item.id, displayDate, classYear);
     
     const { data } = await supabase
       .from('transakcje')
@@ -2774,7 +2852,7 @@ export default function DashboardPage() {
 
         for (const item of zajeciaDnia) {
           const classKey = `${item.id}_${col.date}`;
-          const keysToDelete = getKeysVariants(item.id, col.date);
+          const keysToDelete = getKeysVariants(item.id, col.date, col.fullDate.getFullYear());
           const zapisani = zapisyNaZajecia[classKey] || [];
           const participantIds: number[] = [];
           
@@ -2816,7 +2894,7 @@ export default function DashboardPage() {
           if (participantIds.length > 0) {
             await sendPushNotification(participantIds, {
               title: `Odwołano zajęcia: ${item.title}`,
-              body: `Zajęcia "${item.title}" w dniu ${col.date} o godz. ${item.start} zostały odwołane z powodu wydarzenia "${multiDayTitle}". Zwrócono wejście.`,
+              body: `Zajęcia "${item.title}" w dniu ${col.date} o godz. ${item.start} zostały odwołany z powodu wydarzenia "${multiDayTitle}". Zwrócono wejście.`,
               url: '/'
             });
           }
@@ -2849,7 +2927,8 @@ export default function DashboardPage() {
     const newLimitNum = parseInt(editLimit, 10) || 12;
 
     const classKey = `${editClassModalData.id}_${editClassModalData.displayDate}`;
-    const allVariantKeys = getKeysVariants(editClassModalData.id, editClassModalData.displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const allVariantKeys = getKeysVariants(editClassModalData.id, editClassModalData.displayDate, classYear);
 
     await supabase.from('nadpisania_zajec').delete().in('class_key', allVariantKeys);
     const rowsToInsert = allVariantKeys.map(vKey => ({
@@ -2914,7 +2993,8 @@ export default function DashboardPage() {
 
   const handleToggleOdwolajZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
-    const allVariantKeys = getKeysVariants(item.id, displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const allVariantKeys = getKeysVariants(item.id, displayDate, classYear);
     const nextOdwołaneState = !item.isOdwołane;
 
     setActiveMenuClassId(null);
@@ -2937,7 +3017,6 @@ export default function DashboardPage() {
         const p = displayDate.split('-').map(Number);
         m = p[1]; d = p[2];
       }
-      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
       const dayDate = new Date(classYear, m - 1, d);
       const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
       const dayName = dayNames[dayDate.getDay()];
@@ -3004,8 +3083,16 @@ export default function DashboardPage() {
         is_usuniete: item.isUsunięte || false
       }));
       await supabase.from('nadpisania_zajec').insert(rowsToInsert);
-    }
 
+      // Trwały zapis nadrzędnej decyzji Administratora o przywróceniu zajęć (blokuje ponowne auto-odwołanie tego terminu)
+      await supabase.from('booking_logs').insert([{
+        action_type: 'CLASS_MANUAL_RESTORED',
+        status: 'SUCCESS',
+        reason: `Administrator ręcznie przywrócił zajęcia ${item.title} (${classKey}) - blokada ponownego auto-odwołania.`,
+        rule_applied: `auto_cancel_guard_${classKey}`,
+        payload: { class_key: classKey, variant_keys: allVariantKeys }
+      }]);
+    }
     setNadpisaneZajeciaDni(prev => {
       const updated = { ...prev };
       allVariantKeys.forEach(k => {
@@ -3032,7 +3119,8 @@ export default function DashboardPage() {
 
   const handleToggleUsunZajecia = async (item: any, displayDate: string) => {
     const classKey = `${item.id}_${displayDate}`;
-    const keysToDelete = getKeysVariants(item.id, displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const keysToDelete = getKeysVariants(item.id, displayDate, classYear);
     const nextUsunięteState = !item.isUsunięte;
 
     setActiveMenuClassId(null);
@@ -3266,7 +3354,7 @@ export default function DashboardPage() {
             );
             
             if (classStartDateTime > now) {
-              const keysToDelete = getKeysVariants(classId, dateStr);
+              const keysToDelete = getKeysVariants(classId, dateStr, classDetails.targetDayDate.getFullYear());
               const classKey = `${classId}_${dateStr}`;
               const aktualni = zapisyNaZajecia[classKey] || [];
 
@@ -3331,7 +3419,7 @@ export default function DashboardPage() {
             const isBeforeEnd = !zawieszonyDo || classDateStr <= zawieszonyDo;
 
             if (isAfterStart && isBeforeEnd && classDate >= todayBeginning) {
-              const keysToDelete = getKeysVariants(classId, dateStr);
+              const keysToDelete = getKeysVariants(classId, dateStr, classDetails.targetDayDate.getFullYear());
               const classKey = `${classId}_${dateStr}`;
               const aktualni = zapisyNaZajecia[classKey] || [];
 
@@ -3648,8 +3736,7 @@ export default function DashboardPage() {
       setIsBuyPassModalOpen(false);
     }
   };
-
-  const handleDeleteClient = async (id: number) => {
+    const handleDeleteClient = async (id: number) => {
     if (confirm("Czy na pewno chcesz całkowicie usunąć to konto?")) {
       await supabase.from('klienci').delete().eq('id', id);
       setTableActionClient(null);
@@ -3772,7 +3859,7 @@ export default function DashboardPage() {
             );
 
             if (classStartDateTime > now) {
-              const keysToDelete = getKeysVariants(classId, dateStr);
+              const keysToDelete = getKeysVariants(classId, dateStr, classDetails.targetDayDate.getFullYear());
               const classKey = `${classId}_${dateStr}`;
               const aktualni = zapisyNaZajecia[classKey] || [];
 
@@ -3968,7 +4055,7 @@ export default function DashboardPage() {
             );
             
             if (classStartDateTime > now) {
-              const keysToDelete = getKeysVariants(classId, dateStr);
+              const keysToDelete = getKeysVariants(classId, dateStr, classDetails.targetDayDate.getFullYear());
               const classKey = `${classId}_${dateStr}`;
               const aktualni = zapisyNaZajecia[classKey] || [];
 
@@ -4121,7 +4208,8 @@ export default function DashboardPage() {
   // OPTYMISTYCZNA OBSŁUGA OBECNOŚCI
   const toggleObecny = async (klientId: number) => {
     if (!selectedClass) return;
-    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
     const aktualni = zapisyNaZajecia[`${selectedClass.id}_${selectedClass.displayDate}`] || [];
     const szukany = aktualni.find(k => String(k.klient_id || k.id) === String(klientId));
     if (!szukany) return;
@@ -4154,7 +4242,8 @@ export default function DashboardPage() {
     if (!selectedClass) return;
 
     if (osobaZapisana.nieobecny) {
-      const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
       setZapisyNaZajecia(prev => {
         const updated = { ...prev };
         keys.forEach(k => {
@@ -4185,7 +4274,8 @@ export default function DashboardPage() {
   const wykonajNieobecnoscDlaTrenera = async (osobaZapisana: any, klient: any) => {
     if (!selectedClass) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
 
     setZapisyNaZajecia(prev => {
       const updated = { ...prev };
@@ -4337,7 +4427,6 @@ export default function DashboardPage() {
       });
 
       if (!passAllowsThisClass) {
-        const isPersonal = normalizeText(selectedClass.title).includes('personaln');
         const activePassesOnDate = karnetyUzytkownika.filter((k: any) => {
           const pStart = getPassStartDate(k);
           if (pStart && calcClassDateStr < pStart) return false;
@@ -4349,9 +4438,7 @@ export default function DashboardPage() {
           return pStart && calcClassDateStr < pStart && checkPassAllowsClass(k, selectedClass.title, dostepneKarnety);
         });
 
-        const errorMsg = isPersonal
-          ? `Na trening "${selectedClass.title}" obowiązują wyłącznie karnety na umowę 12M!`
-          : futureOpenPass && activePassesOnDate.length > 0
+        const errorMsg = futureOpenPass && activePassesOnDate.length > 0
           ? `W dniu ${calcClassDateStr} obowiązuje Twój karnet "${activePassesOnDate[0].nazwa}", który nie obejmuje zajęć "${selectedClass.title}". Karnet "${futureOpenPass.nazwa}" zacznie obowiązywać dopiero od ${getPassStartDate(futureOpenPass)}.`
           : `Twój karnet nie upoważnia do zapisu na zajęcia "${selectedClass.title}"! Wybierz odpowiedni karnet w zakładce Karnety.`;
 
@@ -4359,7 +4446,7 @@ export default function DashboardPage() {
           action_type: 'BOOKING_BLOCKED',
           status: 'BLOCKED',
           reason: `${currentUser.firstName || 'Klubowicz'}: ${errorMsg}`,
-          rule_applied: isPersonal ? 'personal_training_contract_only' : 'pass_class_restriction',
+          rule_applied: 'pass_class_restriction',
           payload: { klient_id: currentUser.id, class_id: selectedClass.id, class_title: selectedClass.title, class_date: calcClassDateStr }
         }]);
         showToast(errorMsg, 'error');
@@ -4409,7 +4496,7 @@ export default function DashboardPage() {
       }
 
       const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
 
       const { data: liveSignupsDb } = await supabase
         .from('zapisy_zajec')
@@ -4691,7 +4778,6 @@ export default function DashboardPage() {
       setIsSubmittingBooking(false);
     }
   };
-
   const handleConfirmWaitlistSignup = async (cutoffMinutes: number) => {
     if (!currentUser || !selectedClass) return;
     
@@ -4701,7 +4787,8 @@ export default function DashboardPage() {
 
     try {
       const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
       
       const { data: liveDbCheck } = await supabase
         .from('zapisy_zajec')
@@ -4756,8 +4843,7 @@ export default function DashboardPage() {
           const wp = selectedClass.displayDate.split('-').map(Number);
           wm = wp[1]; wd = wp[2];
         }
-        const wy = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
-        return `${wy}-${String(wm).padStart(2, '0')}-${String(wd).padStart(2, '0')}`;
+        return `${classYear}-${String(wm).padStart(2, '0')}-${String(wd).padStart(2, '0')}`;
       })();
 
       let updatedKarnety = [...(currentUser.karnetyKlubowicza || [])];
@@ -4812,7 +4898,6 @@ export default function DashboardPage() {
         const p = selectedClass.displayDate.split('-').map(Number);
         m = p[1]; d = p[2];
       }
-      const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
       const classDateObj = new Date(classYear, m - 1, d);
       const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
       const dayOfWeekName = dayNames[classDateObj.getDay()];
@@ -4849,7 +4934,8 @@ export default function DashboardPage() {
 
   const handleUpdateWaitlistCutoff = async (newCutoff: number) => {
     if (!selectedClass || !editWaitlistTarget) return;
-    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
     
     if (editWaitlistTarget.zapis_id) {
       await supabase.from('zapisy_zajec').update({ waitlist_cutoff_minutes: newCutoff }).eq('id', editWaitlistTarget.zapis_id);
@@ -4877,7 +4963,8 @@ export default function DashboardPage() {
     if (!currentUser || !selectedClass) return;
     
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
     const aktualni = zapisyNaZajecia[classKey] || [];
     const myEntry = aktualni.find((u: any) => String(u.klient_id || u.id) === String(currentUser.id));
     const isOnWaitlist = myEntry?.status === 'krzesełko';
@@ -4926,7 +5013,6 @@ export default function DashboardPage() {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) {}
     }
     const [dStr, mStr] = selectedClass.displayDate.split('/');
-    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
     const filteredNadchodzace = updatedNadchodzace.filter((z: any) => {
       const zData = z.data || '';
       return !(zData.includes(selectedClass.displayDate) || zData.includes(`${classYear}-${mStr.padStart(2, '0')}-${dStr.padStart(2, '0')}`));
@@ -5030,7 +5116,7 @@ export default function DashboardPage() {
     const lastUnderscore = classKey.lastIndexOf('_');
     const classId = lastUnderscore !== -1 ? classKey.substring(0, lastUnderscore) : classKey;
     const dateStr = lastUnderscore !== -1 ? classKey.substring(lastUnderscore + 1) : '';
-    const keysToDelete = getKeysVariants(classId, dateStr);
+    const keysToDelete = getKeysVariants(classId, dateStr, fullDateObj.getFullYear());
 
     if (myEntry?.zapis_id) {
       await supabase.from('zapisy_zajec').delete().eq('id', myEntry.zapis_id);
@@ -5198,14 +5284,11 @@ export default function DashboardPage() {
       });
 
       if (klient.karnetyKlubowicza && klient.karnetyKlubowicza.length > 0 && hasAnyValidPassOnClassDate && !passAllowsClass) {
-        const isPersonal = normalizeText(selectedClass.title).includes('personaln');
         const activeOnDateNames = klient.karnetyKlubowicza
           .filter((k: any) => isPassValidForClassDate(k, calcClassDateStr, dzisiajData))
           .map((k: any) => k.nazwa)
           .join(', ') || klient.pass || '';
-        const warnMsg = isPersonal
-          ? `UWAGA: Trening personalny "${selectedClass.title}" wymaga karnetu na umowę 12M. Klient posiada w tym dniu: "${activeOnDateNames}". Czy na pewno chcesz zapisać go mimo to jako zarządca?`
-          : `UWAGA: Aktywny w dniu ${calcClassDateStr} karnet klienta ("${activeOnDateNames}") nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`;
+        const warnMsg = `UWAGA: Aktywny w dniu ${calcClassDateStr} karnet klienta ("${activeOnDateNames}") nie obejmuje zajęć "${selectedClass.title}". Czy na pewno chcesz zapisać go mimo to jako administrator/trener?`;
 
         if (!confirm(warnMsg)) {
           return;
@@ -5220,7 +5303,7 @@ export default function DashboardPage() {
       }
 
       const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+      const allVariantKeys = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
 
       const { data: liveDbSignups } = await supabase
         .from('zapisy_zajec')
@@ -5367,7 +5450,8 @@ export default function DashboardPage() {
   const handlePotwierdzWypisanie = async () => {
     if (!selectedClass || !clientToUnregister) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const keysToDelete = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
     const aktualni = zapisyNaZajecia[classKey] || [];
     const myEntry = aktualni.find((u: any) => String(u.klient_id || u.id) === String(clientToUnregister.id));
 
@@ -5422,7 +5506,6 @@ export default function DashboardPage() {
       try { updatedNadchodzace = JSON.parse(updatedNadchodzace); } catch(e) {}
     }
     const [dStr, mStr] = selectedClass.displayDate.split('/');
-    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
     const filteredNadchodzace = updatedNadchodzace.filter((z: any) => {
       const zData = z.data || '';
       return !(zData.includes(selectedClass.displayDate) || zData.includes(`${classYear}-${mStr.padStart(2, '0')}-${dStr.padStart(2, '0')}`));
@@ -5500,7 +5583,8 @@ export default function DashboardPage() {
   const handlePotwierdzNieobecnosc = async () => {
     if (!selectedClass || !clientToMarkAbsent) return;
     const classKey = `${selectedClass.id}_${selectedClass.displayDate}`;
-    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate);
+    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
+    const keys = getKeysVariants(selectedClass.id, selectedClass.displayDate, classYear);
     const aktualni = zapisyNaZajecia[classKey] || [];
     const myEntry = aktualni.find((u: any) => String(u.klient_id || u.id) === String(clientToMarkAbsent.id));
 
@@ -5517,7 +5601,6 @@ export default function DashboardPage() {
       const p = selectedClass.displayDate.split('-').map(Number);
       m = p[1]; d = p[2];
     }
-    const classYear = selectedWeekDate ? selectedWeekDate.getFullYear() : new Date().getFullYear();
     const classDateObj = new Date(classYear, m - 1, d);
     const dayNames = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
     const dayOfWeekName = dayNames[classDateObj.getDay()];
@@ -6012,7 +6095,6 @@ export default function DashboardPage() {
         }
         return null;
       })()}
-
       {/* BANNER 5: BRAK KARNETU */}
       {appRole === 'klubowicz' && needsNewPass && (
         <div className="bg-amber-100 border border-amber-300 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in zoom-in-95">
@@ -7527,7 +7609,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
               )}
-
               {/* Dolny pasek zapisu */}
               {['klubowicz', 'trener'].includes(appRole) && !canManageClass ? (
                 <div className="pt-2">
@@ -7586,7 +7667,6 @@ export default function DashboardPage() {
                       }
 
                       if (appRole === 'klubowicz' && hasValidPassOnClassDate && !allowsThisClass) {
-                        const isPersonal = normalizeText(selectedClass.title).includes('personaln');
                         const activePassesOnDate = currentUser.karnetyKlubowicza.filter((k: any) =>
                           isPassValidForClassDate(k, calcClassDateStr, todayDateOnly)
                         );
@@ -7597,11 +7677,9 @@ export default function DashboardPage() {
 
                         return (
                           <div className="w-full bg-amber-50 border border-amber-300 text-amber-950 font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider text-center shadow-sm space-y-1">
-                            <div>⚠️ {isPersonal ? 'Na trening personalny obowiązuje wyłącznie umowa 12M' : 'Twój karnet nie upoważnia do zapisu na te zajęcia'}</div>
+                            <div>⚠️ Twój karnet nie upoważnia do zapisu na te zajęcia</div>
                             <div className="text-[10px] font-medium text-amber-800 lowercase first-letter:uppercase">
-                              {isPersonal
-                                ? 'Zapis możliwy tylko z aktywnym karnetem na umowę 12 miesięcy.'
-                                : futureOpenPass && activePassesOnDate.length > 0
+                              {futureOpenPass && activePassesOnDate.length > 0
                                 ? `W dniu ${calcClassDateStr} obowiązuje Twój obecny karnet ("${activePassesOnDate[0].nazwa}"). Karnet "${futureOpenPass.nazwa}" zacznie obowiązywać od ${getPassStartDate(futureOpenPass)}.`
                                 : 'Wybierz inny karnet obejmujący te zajęcia w zakładce Karnety.'}
                             </div>
@@ -8915,19 +8993,33 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {modalHistoryData.map((hItem: any) => (
-                    <tr key={hItem.id}>
-                      <td className="py-3 px-3 font-mono">
-                        {new Date(hItem.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                      </td>
-                      <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800">
-                        {hItem.typ_operacji.replace('_', ' ')}
-                      </td>
-                      <td className="py-3 px-3 font-medium text-slate-700">
-                        {hItem.opis}
-                      </td>
-                    </tr>
-                  ))}
+                  {modalHistoryData.map((hItem: any) => {
+                    const matchedClient = hItem.klient_id ? klienciList.find(c => Number(c.id) === Number(hItem.klient_id)) : null;
+                    const resolvedPersonName = matchedClient
+                      ? `${matchedClient.firstName || ''} ${matchedClient.lastName || ''}`.trim()
+                      : (hItem.klient_id ? `Klubowicz #${hItem.klient_id}` : '');
+                    const rawOpis = String(hItem.opis || '');
+                    const enhancedOpis = (resolvedPersonName && rawOpis.startsWith('Klubowicz - '))
+                      ? rawOpis.replace(/^Klubowicz - /, `${resolvedPersonName} - `)
+                      : rawOpis;
+
+                    return (
+                      <tr key={hItem.id}>
+                        <td className="py-3 px-3 font-mono whitespace-nowrap">
+                          {new Date(hItem.created_at).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                        <td className="py-3 px-3 font-bold uppercase text-[10px] tracking-wider text-sky-800 whitespace-nowrap">
+                          {hItem.typ_operacji.replace(/_/g, ' ')}
+                        </td>
+                        <td className="py-3 px-3 font-medium text-slate-700">
+                          {resolvedPersonName && !enhancedOpis.toLowerCase().includes(resolvedPersonName.toLowerCase()) && (
+                            <span className="font-black text-sky-950 mr-1.5">[{resolvedPersonName}]</span>
+                          )}
+                          {enhancedOpis}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {modalHistoryData.length === 0 && (
                     <tr key="empty-history">
                       <td colSpan={3} className="py-8 text-center text-slate-400">Brak zarejestrowanych zdarzeń w historii tych zajęć.</td>
